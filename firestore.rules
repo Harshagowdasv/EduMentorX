@@ -1,0 +1,351 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =========================================================================
+    // AUTH & INSTITUTIONAL ROLE HELPER FUNCTIONS
+    // =========================================================================
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function getUserRole() {
+      return request.auth.token.role != null
+        ? request.auth.token.role
+        : (exists(/databases/$(database)/documents/users/$(request.auth.uid))
+            ? getUserData().role
+            : null);
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.role == 'admin' ||
+        getUserRole() == 'admin' ||
+        request.auth.token.email == 'admin@edumentorx.edu'
+      );
+    }
+
+    function isMentor() {
+      return isSignedIn() && (
+        request.auth.token.role == 'mentor' ||
+        getUserRole() == 'mentor'
+      );
+    }
+
+    function isStudent() {
+      return isSignedIn() && (
+        request.auth.token.role == 'student' ||
+        getUserRole() == 'student'
+      );
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Resolves canonical mentor document ID if stored on user profile
+    function getMentorId() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserData().mentorId != null
+        ? getUserData().mentorId
+        : request.auth.uid;
+    }
+
+    // Active Allocation Check: Verifies if active allocation exists between mentorId and studentId
+    function hasActiveAllocation(mentorId, studentId) {
+      return (
+        exists(/databases/$(database)/documents/mentorAllocations/$(mentorId + '_' + studentId)) &&
+        get(/databases/$(database)/documents/mentorAllocations/$(mentorId + '_' + studentId)).data.status == 'ACTIVE'
+      ) || (
+        exists(/databases/$(database)/documents/allocations/$(mentorId + '_' + studentId)) &&
+        get(/databases/$(database)/documents/allocations/$(mentorId + '_' + studentId)).data.status == 'ACTIVE'
+      );
+    }
+
+    function isAssignedMentor(studentId) {
+      return isMentor() && (
+        hasActiveAllocation(request.auth.uid, studentId) ||
+        hasActiveAllocation(getMentorId(), studentId) ||
+        (exists(/databases/$(database)/documents/students/$(studentId)) &&
+          get(/databases/$(database)/documents/students/$(studentId)).data.mentorId == request.auth.uid) ||
+        (exists(/databases/$(database)/documents/students/$(studentId)) &&
+          get(/databases/$(database)/documents/students/$(studentId)).data.mentorId == getMentorId())
+      );
+    }
+
+    // =========================================================================
+    // COLLECTION ACCESS RULES
+    // =========================================================================
+
+    // 1. USERS COLLECTION
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || (
+        isOwner(userId) &&
+        request.resource.data.role == resource.data.role &&
+        (!request.resource.data.keys().hasAny(['mentorId', 'studentId']) ||
+         request.resource.data.mentorId == resource.data.mentorId)
+      );
+    }
+
+    // 2. MENTORS COLLECTION (Access restricted to assigned students, mentor self, or admin)
+    match /mentors/{mentorId} {
+      allow read: if isAdmin() ||
+                  (isMentor() && (request.auth.uid == mentorId || getMentorId() == mentorId || (resource.data.userId != null && resource.data.userId == request.auth.uid))) ||
+                  (isStudent() && (
+                    (exists(/databases/$(database)/documents/students/$(request.auth.uid)) &&
+                     get(/databases/$(database)/documents/students/$(request.auth.uid)).data.mentorId == mentorId) ||
+                    hasActiveAllocation(mentorId, request.auth.uid)
+                  ));
+      allow write: if isAdmin();
+    }
+
+    // 3. STUDENTS COLLECTION (Mentors access ONLY assigned mentees; Students access own data)
+    match /students/{studentId} {
+      allow read: if isAdmin() ||
+                  (isStudent() && (isOwner(studentId) || (resource.data.userId != null && resource.data.userId == request.auth.uid))) ||
+                  isAssignedMentor(studentId);
+
+      allow write: if isAdmin();
+      allow update: if isStudent() && (isOwner(studentId) || (resource.data.userId != null && resource.data.userId == request.auth.uid)) &&
+                     !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+                       'role', 'mentorId', 'mentorName', 'mentorEmail', 'riskLevel', 'riskReasons',
+                       'usn', 'cgpa', 'attendance', 'financialScore', 'studyHours',
+                       'previousYearBacklogs', 'currentBacklogs', 'academicStatus',
+                       'department', 'program', 'year', 'semester', 'section', 'admissionYear'
+                     ]);
+    }
+
+    // 4. MENTOR ALLOCATIONS COLLECTION
+    match /mentorAllocations/{allocationId} {
+      allow read: if isAdmin() ||
+                  (isMentor() && (resource.data.mentorId == request.auth.uid || resource.data.mentorId == getMentorId()));
+      allow write: if isAdmin();
+    }
+
+    match /allocations/{allocationId} {
+      allow read: if isAdmin() ||
+                  (isMentor() && (resource.data.mentorId == request.auth.uid || resource.data.mentorId == getMentorId()));
+      allow write: if isAdmin();
+    }
+
+    // 5. NOTIFICATIONS COLLECTION
+    match /notifications/{notificationId} {
+      allow read: if isAdmin() ||
+                  (isMentor() && resource.data.recipientRole == 'mentor' &&
+                    (resource.data.recipientUserId == request.auth.uid || resource.data.recipientUserId == getMentorId() || resource.data.recipientId == request.auth.uid)) ||
+                  (isStudent() && resource.data.recipientRole == 'student' &&
+                    (resource.data.recipientUserId == request.auth.uid || resource.data.recipientId == request.auth.uid));
+
+      allow update: if isSignedIn() && (
+                      resource.data.recipientUserId == request.auth.uid ||
+                      resource.data.recipientUserId == getMentorId() ||
+                      resource.data.recipientId == request.auth.uid
+                    ) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+
+      allow create, delete: if isAdmin();
+    }
+
+    // 6. SAFETY ALERTS COLLECTION (Students DENIED; Mentors access ONLY assigned mentees)
+    match /safetyAlerts/{alertId} {
+      allow read: if isAdmin() ||
+                  (isMentor() && (resource.data.mentorId == request.auth.uid || resource.data.mentorId == getMentorId()) && isAssignedMentor(resource.data.studentId));
+
+      allow update: if isAdmin() ||
+                     (isMentor() && (resource.data.mentorId == request.auth.uid || resource.data.mentorId == getMentorId()) && isAssignedMentor(resource.data.studentId) &&
+                      request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'reviewerNotes']));
+
+      allow create, delete: if isAdmin();
+    }
+
+    // 7. AUDIT LOGS COLLECTION (Admin read only; Client writes DENIED)
+    match /auditLogs/{logId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // 8. MENTORSHIP NOTES COLLECTION (Requires active mentor allocation)
+    match /notes/{noteId} {
+      allow read: if isAdmin() ||
+                  (isMentor() && (resource.data.mentorId == request.auth.uid || resource.data.mentorId == getMentorId()) && isAssignedMentor(resource.data.studentId));
+      allow create: if isMentor() && (request.resource.data.mentorId == request.auth.uid || request.resource.data.mentorId == getMentorId()) && isAssignedMentor(request.resource.data.studentId);
+      allow update, delete: if isAdmin() || (isMentor() && (resource.data.mentorId == request.auth.uid || resource.data.mentorId == getMentorId()) && isAssignedMentor(resource.data.studentId));
+    }
+
+    match /mentorshipNotes/{noteId} {
+      allow read: if isAdmin() ||
+                  (isMentor() && (resource.data.mentorId == request.auth.uid || resource.data.mentorId == getMentorId()) && isAssignedMentor(resource.data.studentId));
+      allow create: if isMentor() && (request.resource.data.mentorId == request.auth.uid || request.resource.data.mentorId == getMentorId()) && isAssignedMentor(request.resource.data.studentId);
+      allow update, delete: if isAdmin() || (isMentor() && (resource.data.mentorId == request.auth.uid || resource.data.mentorId == getMentorId()) && isAssignedMentor(request.resource.data.studentId));
+    }
+
+    // 9. CONVERSATIONS COLLECTION (Mentor access requires active allocation)
+    match /conversations/{convId} {
+      allow read: if isAdmin() ||
+                  (isStudent() && resource.data.studentId == request.auth.uid) ||
+                  (isMentor() && (resource.data.mentorId == request.auth.uid || resource.data.mentorId == getMentorId()) && isAssignedMentor(resource.data.studentId));
+
+      allow create: if isAdmin() ||
+                     (isStudent() && request.resource.data.studentId == request.auth.uid) ||
+                     (isMentor() && (request.resource.data.mentorId == request.auth.uid || request.resource.data.mentorId == getMentorId()) && isAssignedMentor(request.resource.data.studentId));
+
+      allow update: if isAdmin() ||
+                     (isStudent() && resource.data.studentId == request.auth.uid) ||
+                     (isMentor() && (request.resource.data.mentorId == request.auth.uid || request.resource.data.mentorId == getMentorId()) && isAssignedMentor(request.resource.data.studentId));
+    }
+
+    // 10. MEETINGS & FOLLOW-UP TASKS (Mentor access requires active allocation)
+    match /meetings/{meetingId} {
+      allow read: if isAdmin() ||
+                  (isStudent() && resource.data.studentId == request.auth.uid) ||
+                  (isMentor() && (resource.data.mentorId == request.auth.uid || resource.data.mentorId == getMentorId()) && isAssignedMentor(resource.data.studentId));
+
+      allow create: if isAdmin() ||
+                     (isMentor() && (request.resource.data.mentorId == request.auth.uid || request.resource.data.mentorId == getMentorId()) && isAssignedMentor(request.resource.data.studentId));
+
+      allow update, delete: if isAdmin() ||
+                             (isMentor() && (resource.data.mentorId == request.auth.uid || resource.data.mentorId == getMentorId()) && isAssignedMentor(resource.data.studentId));
+    }
+
+    match /followUpTasks/{taskId} {
+      allow read: if isAdmin() ||
+                  (isStudent() && resource.data.studentId == request.auth.uid) ||
+                  (isMentor() && (resource.data.mentorId == request.auth.uid || resource.data.mentorId == getMentorId()) && isAssignedMentor(resource.data.studentId));
+
+      allow create: if isAdmin() ||
+                     (isMentor() && (request.resource.data.mentorId == request.auth.uid || request.resource.data.mentorId == getMentorId()) && isAssignedMentor(request.resource.data.studentId));
+
+      allow update: if isAdmin() ||
+                     (isStudent() && resource.data.studentId == request.auth.uid) ||
+                     (isMentor() && (resource.data.mentorId == request.auth.uid || resource.data.mentorId == getMentorId()) && isAssignedMentor(request.resource.data.studentId));
+    }
+
+    // 11. COURSES & ACTIVITIES (Creation requires active allocation to student)
+    match /courses/{courseId} {
+      allow read: if isAdmin() ||
+                  (isStudent() && resource.data.studentId == request.auth.uid) ||
+                  isAssignedMentor(resource.data.studentId);
+
+      allow create: if isAdmin() ||
+                     (isMentor() && (request.resource.data.assignedByMentorId == request.auth.uid || request.resource.data.assignedByMentorId == getMentorId()) && isAssignedMentor(request.resource.data.studentId));
+
+      allow update: if isAdmin() ||
+                     isAssignedMentor(resource.data.studentId) ||
+                     (isStudent() && resource.data.studentId == request.auth.uid);
+    }
+
+    match /activities/{activityId} {
+      allow read: if isAdmin() ||
+                  (isStudent() && resource.data.studentId == request.auth.uid) ||
+                  isAssignedMentor(resource.data.studentId);
+
+      allow create: if isAdmin() ||
+                     isAssignedMentor(request.resource.data.studentId) ||
+                     (isStudent() && request.resource.data.studentId == request.auth.uid);
+
+      allow update: if isAdmin() ||
+                     isAssignedMentor(resource.data.studentId) ||
+                     (isStudent() && request.resource.data.studentId == request.auth.uid);
+    }
+
+    // 12. RESOURCES COLLECTION
+    match /resources/{resourceId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdmin() || isMentor();
+    }
+
+    // 13. PORTFOLIOS, GOALS, ACHIEVEMENTS, STUDY PLANS
+    match /portfolios/{portfolioId} {
+      allow read: if isAdmin() ||
+                  (isStudent() && (resource.data.studentId == request.auth.uid || portfolioId == request.auth.uid)) ||
+                  isAssignedMentor(resource.data.studentId);
+      allow write: if isAdmin() || (isStudent() && (resource.data.studentId == request.auth.uid || portfolioId == request.auth.uid));
+    }
+
+    match /goals/{goalId} {
+      allow read: if isAdmin() ||
+                  (isStudent() && resource.data.studentId == request.auth.uid) ||
+                  isAssignedMentor(resource.data.studentId);
+      allow create, update, delete: if isAdmin() || (isStudent() && resource.data.studentId == request.auth.uid);
+    }
+
+    match /achievements/{achId} {
+      allow read: if isAdmin() ||
+                  (isStudent() && resource.data.studentId == request.auth.uid) ||
+                  isAssignedMentor(resource.data.studentId);
+      allow create, update, delete: if isAdmin() || (isStudent() && resource.data.studentId == request.auth.uid);
+    }
+
+    match /studyPlans/{planId} {
+      allow read: if isAdmin() ||
+                  (isStudent() && resource.data.studentId == request.auth.uid) ||
+                  isAssignedMentor(resource.data.studentId);
+      allow create, update, delete: if isAdmin() || (isStudent() && resource.data.studentId == request.auth.uid);
+    }
+
+    match /resumeAnalyses/{id} {
+      allow read, write: if isAdmin() || (isStudent() && resource.data.studentId == request.auth.uid);
+    }
+
+    match /careerGuidance/{id} {
+      allow read, write: if isAdmin() || (isStudent() && resource.data.studentId == request.auth.uid);
+    }
+
+    // 14. INTERVENTIONS, FEEDBACK, AI SUMMARIES & MEMORIES (Require active allocation)
+    match /interventions/{intervId} {
+      allow read: if isAdmin() ||
+                  (isMentor() && (resource.data.mentorId == request.auth.uid || resource.data.mentorId == getMentorId()) && isAssignedMentor(resource.data.studentId));
+      allow create, update: if isAdmin() || (isMentor() && isAssignedMentor(request.resource.data.studentId));
+    }
+
+    match /meetingFeedback/{fbId} {
+      allow read: if isAdmin() ||
+                  (isStudent() && resource.data.studentId == request.auth.uid) ||
+                  (isMentor() && (resource.data.mentorId == request.auth.uid || resource.data.mentorId == getMentorId()) && isAssignedMentor(resource.data.studentId));
+      allow create: if isSignedIn();
+    }
+
+    match /studentFeedback/{fbId} {
+      allow read: if isAdmin() ||
+                  (isStudent() && resource.data.studentId == request.auth.uid) ||
+                  (isMentor() && (resource.data.mentorId == request.auth.uid || resource.data.mentorId == getMentorId()) && isAssignedMentor(resource.data.studentId));
+      allow create: if isSignedIn();
+    }
+
+    match /aiMeetingSummaries/{id} {
+      allow read: if isAdmin() || (isMentor() && (resource.data.mentorId == request.auth.uid || resource.data.mentorId == getMentorId()) && isAssignedMentor(resource.data.studentId));
+      allow write: if isAdmin() || (isMentor() && isAssignedMentor(request.resource.data.studentId));
+    }
+
+    match /aiMemories/{id} {
+      allow read: if isAdmin() || (isMentor() && (resource.data.mentorId == request.auth.uid || resource.data.mentorId == getMentorId()) && isAssignedMentor(resource.data.studentId));
+      allow write: if isAdmin() || (isMentor() && isAssignedMentor(request.resource.data.studentId));
+    }
+
+    match /calendarEvents/{id} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /academicYears/{id} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /semesters/{id} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /importHistory/{id} {
+      allow read, write: if isAdmin();
+    }
+
+  }
+}
