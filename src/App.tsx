@@ -16,6 +16,7 @@ import { Header } from './components/common/Header';
 import { DemoDiagnosticPanel } from './components/common/DemoDiagnosticPanel';
 import { Student360View } from './components/student360/Student360View';
 import { GlobalSearchModal } from './components/governance/GlobalSearchModal';
+import { ForcePasswordChangeModal } from './components/auth/ForcePasswordChangeModal';
 
 // Admin Views (Phases 1, 2 & 3)
 import { AdminDashboardOverview } from './components/admin/AdminDashboardOverview';
@@ -130,6 +131,7 @@ const MainApp: React.FC = () => {
   // 2. AUTHENTICATED PORTAL DASHBOARDS
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex font-sans">
+      <ForcePasswordChangeModal />
       {/* Sidebar Navigation */}
       <Sidebar
         role={user.role}

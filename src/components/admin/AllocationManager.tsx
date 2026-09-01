@@ -533,7 +533,19 @@ export const AllocationManager: React.FC<AllocationManagerProps> = ({ actorId, o
 
             {/* Mentors Selection Grid */}
             <div className="max-h-48 overflow-y-auto space-y-2 pr-1">
-              {filteredMentors.map((m) => {
+              {mentors
+                .filter((m) => m.status === 'active' || (m as any).status !== 'inactive')
+                .filter((m) => {
+                  const q = mentorSearchQuery.toLowerCase().trim();
+                  if (!q) return true;
+                  return (
+                    m.name.toLowerCase().includes(q) ||
+                    m.email.toLowerCase().includes(q) ||
+                    m.department.toLowerCase().includes(q) ||
+                    (m.staffId && m.staffId.toLowerCase().includes(q))
+                  );
+                })
+                .map((m) => {
                 const isSelected = selectedMentor?.id === m.id;
                 return (
                   <div

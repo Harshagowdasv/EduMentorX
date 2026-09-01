@@ -216,6 +216,11 @@ export const CSVImportModal: React.FC<CSVImportModalProps> = ({
         {/* Strategy Selector & Preview */}
         {!result && rawParsedData.length > 0 && (
           <div className="space-y-4">
+            <div className="p-3.5 rounded-xl bg-indigo-950/40 border border-indigo-800/60 text-indigo-300 text-xs flex items-center gap-2.5">
+              <ShieldCheck className="w-4 h-4 text-indigo-400 shrink-0" />
+              <span>New students can initially sign in using their registered email address and phone number as their temporary password.</span>
+            </div>
+
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-xl bg-slate-950 border border-slate-800 text-xs">
               <div>
                 <label className="font-bold text-slate-300 block mb-1">Duplicate USN Handling Strategy</label>

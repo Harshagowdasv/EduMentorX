@@ -24,6 +24,18 @@ async function runCli() {
 
   try {
     const status = await checkAdminStatus();
+
+    if (!status.isInitialized || status.error) {
+      console.error('\n[INITIALIZATION ERROR]:', status.error || 'Firebase Admin SDK is not initialized.');
+      console.error('\nTroubleshooting:');
+      console.error('  1. Download your service account key from:');
+      console.error('     Firebase Console -> Project Settings -> Service Accounts -> Generate New Private Key');
+      console.error('  2. Set environment variable or save file to server directory:');
+      console.error('     PowerShell: $env:GOOGLE_APPLICATION_CREDENTIALS="C:\\path\\to\\service-account.json"');
+      console.error('     CMD:        set GOOGLE_APPLICATION_CREDENTIALS=C:\\path\\to\\service-account.json');
+      process.exit(1);
+    }
+
     if (status.hasAdmin) {
       console.log('\n[REFUSED]: Initial Administrator account already exists!');
       console.log(`Admin email: ${status.adminEmail}`);

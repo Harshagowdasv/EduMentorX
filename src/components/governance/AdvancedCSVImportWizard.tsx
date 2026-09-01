@@ -139,6 +139,7 @@ export const AdvancedCSVImportWizard: React.FC<AdvancedCSVImportWizardProps> = (
               <div>
                 <h3 className="text-base font-bold text-white tracking-tight">Institutional Student Data Import</h3>
                 <p className="text-xs text-slate-400 mt-0.5">Upload CSV files to batch import students and auto-allocate faculty mentors</p>
+                <p className="text-xs text-indigo-400 mt-1 font-medium">New students can initially sign in using their registered email address and phone number as their temporary password.</p>
               </div>
 
               <button

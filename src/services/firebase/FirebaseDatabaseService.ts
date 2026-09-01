@@ -34,6 +34,8 @@ import {
   StudentTrendStatus
 } from '../../types';
 import { DemoDatabaseService } from '../demo/DemoDatabaseService';
+import { db, isFirebaseConfigured } from './firebaseConfig';
+import { collection, getDocs, doc, setDoc, query, where } from 'firebase/firestore';
 
 export class FirebaseDatabaseService implements IDatabaseService {
   private fallback: DemoDatabaseService;
@@ -43,15 +45,109 @@ export class FirebaseDatabaseService implements IDatabaseService {
   }
 
   async getMentors(): Promise<Mentor[]> {
-    return this.fallback.getMentors();
+    if (!isFirebaseConfigured || !db) {
+      return this.fallback.getMentors();
+    }
+
+    try {
+      const mentorsSnap = await getDocs(collection(db, 'mentors'));
+      const mentorsList: Mentor[] = [];
+
+      mentorsSnap.forEach((d) => {
+        const data = d.data();
+        mentorsList.push({
+          id: d.id,
+          userId: data.userId || d.id,
+          name: data.name || 'Unnamed Mentor',
+          email: data.email || '',
+          phone: data.phone || '',
+          department: data.department || 'General',
+          staffId: data.staffId || d.id,
+          activeMenteesCount: data.activeMenteesCount || 0,
+          status: data.status === 'inactive' || data.status === 'deactivated' ? 'inactive' : 'active',
+          createdAt: data.createdAt || new Date().toISOString(),
+        });
+      });
+
+      // Also query /users collection for role == 'mentor'
+      const usersQuery = query(collection(db, 'users'), where('role', '==', 'mentor'));
+      const usersSnap = await getDocs(usersQuery);
+
+      usersSnap.forEach((uDoc) => {
+        const uData = uDoc.data();
+        const existing = mentorsList.find(m => m.userId === uDoc.id || m.email.toLowerCase() === (uData.email || '').toLowerCase());
+        if (!existing) {
+          mentorsList.push({
+            id: uDoc.id,
+            userId: uDoc.id,
+            name: uData.name || 'Faculty Mentor',
+            email: uData.email || '',
+            phone: uData.phone || '',
+            department: uData.department || 'General',
+            staffId: uData.staffId || uDoc.id.substring(0, 8),
+            activeMenteesCount: uData.activeMenteesCount || 0,
+            status: uData.status === 'inactive' || uData.status === 'deactivated' ? 'inactive' : 'active',
+            createdAt: uData.createdAt || new Date().toISOString(),
+          });
+        }
+      });
+
+      // Combine with fallback initial seed mentors if not already present
+      const fallbackMentors = await this.fallback.getMentors();
+      for (const fbM of fallbackMentors) {
+        if (!mentorsList.some(m => m.email.toLowerCase() === fbM.email.toLowerCase() || m.id === fbM.id)) {
+          mentorsList.push(fbM);
+        }
+      }
+
+      return mentorsList;
+    } catch (err) {
+      console.warn('[FirebaseDatabaseService] Failed to read /mentors from Firestore:', err);
+      return this.fallback.getMentors();
+    }
   }
 
   async getMentorById(id: string): Promise<Mentor | null> {
-    return this.fallback.getMentorById(id);
+    const mentors = await this.getMentors();
+    return mentors.find(m => m.id === id || m.userId === id) || null;
   }
 
   async createMentor(mentorData: Omit<Mentor, 'id' | 'createdAt' | 'activeMenteesCount' | 'status'>, actorId: string): Promise<Mentor> {
-    return this.fallback.createMentor(mentorData, actorId);
+    try {
+      const res = await fetch('http://localhost:5000/api/admin/create-mentor', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: mentorData.name,
+          email: mentorData.email,
+          phone: mentorData.phone,
+          department: mentorData.department,
+          staffId: mentorData.staffId,
+          actorId,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.mentor) {
+          try {
+            await this.fallback.putMentor(data.mentor);
+          } catch {
+            // Ignore fallback sync error
+          }
+          return data.mentor as Mentor;
+        }
+        throw new Error(data.error || 'Failed to create mentor account.');
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `Server returned status ${res.status}`);
+      }
+    } catch (err: any) {
+      if (err.message && err.message.includes('Failed to fetch')) {
+        throw new Error('Unable to connect to backend server (http://localhost:5000). Please ensure the backend server is running.');
+      }
+      throw err;
+    }
   }
 
   async updateMentor(id: string, updates: Partial<Mentor>, actorId: string): Promise<Mentor> {
@@ -59,7 +155,66 @@ export class FirebaseDatabaseService implements IDatabaseService {
   }
 
   async deactivateMentor(id: string, actorId: string): Promise<void> {
-    return this.fallback.deactivateMentor(id, actorId);
+    try {
+      const res = await fetch('http://localhost:5000/api/admin/deactivate-mentor', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mentorId: id, actorId }),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `Server returned status ${res.status}`);
+      }
+      await this.fallback.deactivateMentor(id, actorId);
+    } catch (err: any) {
+      if (err.message && err.message.includes('Failed to fetch')) {
+        throw new Error('Unable to connect to backend server (http://localhost:5000). Please ensure the backend server is running.');
+      }
+      throw err;
+    }
+  }
+
+  async reactivateMentor(id: string, actorId: string): Promise<void> {
+    try {
+      const res = await fetch('http://localhost:5000/api/admin/reactivate-mentor', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mentorId: id, actorId }),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `Server returned status ${res.status}`);
+      }
+      await this.fallback.reactivateMentor(id, actorId);
+    } catch (err: any) {
+      if (err.message && err.message.includes('Failed to fetch')) {
+        throw new Error('Unable to connect to backend server (http://localhost:5000). Please ensure the backend server is running.');
+      }
+      throw err;
+    }
+  }
+
+  async deleteMentor(id: string, actorId: string): Promise<void> {
+    try {
+      const res = await fetch('http://localhost:5000/api/admin/delete-mentor', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mentorId: id, actorId }),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `Server returned status ${res.status}`);
+      }
+      await this.fallback.deleteMentor(id, actorId);
+    } catch (err: any) {
+      if (err.message && err.message.includes('Failed to fetch')) {
+        throw new Error('Unable to connect to backend server (http://localhost:5000). Please ensure the backend server is running.');
+      }
+      throw err;
+    }
   }
 
   async getStudents(page?: number, limit?: number, filters?: any): Promise<{ students: Student[]; total: number }> {
@@ -71,7 +226,26 @@ export class FirebaseDatabaseService implements IDatabaseService {
   }
 
   async getStudentsByMentorId(mentorId: string): Promise<Student[]> {
-    return this.fallback.getStudentsByMentorId(mentorId);
+    if (!isFirebaseConfigured || !db) {
+      return this.fallback.getStudentsByMentorId(mentorId);
+    }
+
+    try {
+      const allocQuery = query(collection(db, 'mentorAllocations'), where('mentorId', '==', mentorId), where('status', '==', 'ACTIVE'));
+      const allocSnap = await getDocs(allocQuery);
+      const studentIds = new Set<string>();
+      allocSnap.forEach(d => studentIds.add(d.data().studentId));
+
+      const fallbackStudents = await this.fallback.getStudentsByMentorId(mentorId);
+      for (const s of fallbackStudents) {
+        studentIds.add(s.id);
+      }
+
+      const allStudentsRes = await this.getStudents(1, 1000);
+      return allStudentsRes.students.filter(s => studentIds.has(s.id) || s.id === mentorId);
+    } catch (err) {
+      return this.fallback.getStudentsByMentorId(mentorId);
+    }
   }
 
   async createStudent(studentData: Omit<Student, 'id' | 'createdAt' | 'riskLevel' | 'riskReasons'>, actorId: string): Promise<Student> {
@@ -87,7 +261,24 @@ export class FirebaseDatabaseService implements IDatabaseService {
   }
 
   async allocateStudent(studentId: string, mentorId: string, changedBy: string, reason?: string): Promise<void> {
-    return this.fallback.allocateStudent(studentId, mentorId, changedBy, reason);
+    await this.fallback.allocateStudent(studentId, mentorId, changedBy, reason);
+
+    if (db && isFirebaseConfigured) {
+      try {
+        const allocId = `${mentorId}_${studentId}`;
+        await setDoc(doc(db, 'mentorAllocations', allocId), {
+          id: allocId,
+          mentorId,
+          studentId,
+          changedBy,
+          reason: reason || 'Administrative mentee mapping',
+          status: 'ACTIVE',
+          timestamp: new Date().toISOString(),
+        });
+      } catch (err) {
+        console.warn('[FirebaseDatabaseService] Failed to write allocation to Firestore:', err);
+      }
+    }
   }
 
   async bulkAllocateStudents(studentIds: string[], mentorId: string, changedBy: string, options?: { reassignAll?: boolean; reason?: string }): Promise<{ allocatedCount: number; skippedCount: number; failedCount: number }> {

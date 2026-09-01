@@ -22,7 +22,7 @@ export interface Mentor {
   department: string;
   staffId: string;
   activeMenteesCount: number;
-  status: 'active' | 'deactivated';
+  status: 'active' | 'deactivated' | 'inactive';
   createdAt: string;
 }
 
@@ -280,6 +280,9 @@ export interface AppNotification {
 
 export type AuditActionType =
   | 'CREATE_MENTOR'
+  | 'DEACTIVATE_MENTOR'
+  | 'REACTIVATE_MENTOR'
+  | 'DELETE_MENTOR'
   | 'CREATE_STUDENT'
   | 'IMPORT_STUDENTS'
   | 'ALLOCATE_STUDENT'

@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Mentor, Student } from '../../types';
+import { Mentor } from '../../types';
 import { dbService } from '../../services/serviceFactory';
 import { Modal } from '../common/Modal';
-import { UserCheck, Plus, Search, Filter, Mail, Phone, Building2, UserX, Eye } from 'lucide-react';
+import { UserCheck, Plus, Search, Filter, Mail, Phone, Building2, UserX, Eye, ShieldAlert, Trash2, CheckCircle2 } from 'lucide-react';
 
 interface MentorManagementProps {
   onSelectMentor: (mentor: Mentor) => void;
@@ -23,6 +23,8 @@ export const MentorManagement: React.FC<MentorManagementProps> = ({ onSelectMent
   const [department, setDepartment] = useState('Computer Science & Engineering');
   const [staffId, setStaffId] = useState('');
   const [saving, setSaving] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [createdNotice, setCreatedNotice] = useState<{ email: string } | null>(null);
 
   useEffect(() => {
     loadMentors();
@@ -42,38 +44,97 @@ export const MentorManagement: React.FC<MentorManagementProps> = ({ onSelectMent
 
   const handleCreateMentor = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name || !email || !staffId) return;
+    setCreateError(null);
+
+    const cleanEmail = email.trim();
+    const cleanPhone = phone.trim();
+
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      setCreateError('Enter a valid email address.');
+      return;
+    }
+
+    if (!cleanPhone || cleanPhone.replace(/\D/g, '').length === 0) {
+      setCreateError('Phone number is required because it is used as the initial password.');
+      return;
+    }
+
+    if (!staffId.trim()) {
+      setCreateError('Staff / Employee ID is required.');
+      return;
+    }
+
+    if (!name.trim()) {
+      setCreateError('Full name is required.');
+      return;
+    }
+
     setSaving(true);
 
     try {
-      await dbService.createMentor(
+      const newM = await dbService.createMentor(
         {
           userId: `u_m_${Date.now()}`,
-          name,
-          email,
-          phone,
+          name: name.trim(),
+          email: cleanEmail,
+          phone: cleanPhone,
           department,
-          staffId,
+          staffId: staffId.trim(),
         },
         actorId
       );
+
+      setCreatedNotice({ email: newM.email });
       setName('');
       setEmail('');
       setPhone('');
       setStaffId('');
+      setCreateError(null);
       setIsCreateModalOpen(false);
       await loadMentors();
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to create mentor:', err);
+      setCreateError(err.message || 'Mentor account could not be created. Please try again.');
     } finally {
       setSaving(false);
     }
   };
 
   const handleDeactivate = async (mentor: Mentor) => {
-    if (confirm(`Deactivate mentor ${mentor.name}? assigned mentees will become unallocated.`)) {
-      await dbService.deactivateMentor(mentor.id, actorId);
-      await loadMentors();
+    if (confirm(`Deactivate mentor ${mentor.name}? The mentor will no longer be able to log in. Historical records and allocated mentees will be preserved.`)) {
+      try {
+        await dbService.deactivateMentor(mentor.id, actorId);
+        await loadMentors();
+      } catch (err: any) {
+        alert(err.message || 'Mentor could not be deactivated.');
+      }
+    }
+  };
+
+  const handleReactivate = async (mentor: Mentor) => {
+    if (confirm(`Reactivate mentor ${mentor.name}? The mentor will be able to log in again using their existing password.`)) {
+      try {
+        await dbService.reactivateMentor(mentor.id, actorId);
+        await loadMentors();
+      } catch (err: any) {
+        alert(err.message || 'Mentor could not be reactivated.');
+      }
+    }
+  };
+
+  const handleDelete = async (mentor: Mentor) => {
+    if (mentor.activeMenteesCount > 0) {
+      alert('This mentor currently has allocated students. Reassign students before permanently deleting this mentor.');
+      return;
+    }
+
+    if (confirm(`Permanently delete mentor ${mentor.name}? This will remove their authentication account and profile. Historical audit logs will be preserved.`)) {
+      try {
+        await dbService.deleteMentor(mentor.id, actorId);
+        await loadMentors();
+      } catch (err: any) {
+        alert(err.message || 'Mentor could not be deleted.');
+      }
     }
   };
 
@@ -95,12 +156,28 @@ export const MentorManagement: React.FC<MentorManagementProps> = ({ onSelectMent
           <p className="text-xs text-slate-400 mt-1">Manage faculty mentors, departments, and mentee workloads</p>
         </div>
         <button
-          onClick={() => setIsCreateModalOpen(true)}
+          onClick={() => {
+            setCreateError(null);
+            setIsCreateModalOpen(true);
+          }}
           className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:opacity-95 text-white font-bold text-xs shadow-lg shadow-indigo-600/30 transition-all flex items-center justify-center gap-2"
         >
           <Plus className="w-4 h-4" /> Add New Mentor
         </button>
       </div>
+
+      {createdNotice && (
+        <div className="p-4 rounded-2xl bg-emerald-950/60 border border-emerald-800/80 text-emerald-300 text-xs space-y-1 relative backdrop-blur-md">
+          <button onClick={() => setCreatedNotice(null)} className="absolute top-3 right-3 text-slate-400 hover:text-white text-sm">✕</button>
+          <p className="font-bold text-sm text-emerald-200 flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400" /> Mentor created successfully.
+          </p>
+          <p className="mt-1">Initial login credentials:</p>
+          <p>Email: <span className="font-mono font-bold text-white">{createdNotice.email}</span></p>
+          <p>Temporary password: <span className="font-bold text-white">Registered phone number</span></p>
+          <p className="text-[11px] text-slate-400 mt-1">The mentor will be required to create a new password after first login.</p>
+        </div>
+      )}
 
       {/* Filter & Search Bar */}
       <div className="flex flex-col sm:flex-row gap-3">
@@ -111,36 +188,37 @@ export const MentorManagement: React.FC<MentorManagementProps> = ({ onSelectMent
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search by mentor name, email, or staff ID..."
-            className="w-full bg-slate-900 border border-slate-800 rounded-xl py-2.5 pl-10 pr-4 text-xs text-white focus:outline-none focus:border-indigo-500"
+            className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-900 border border-slate-800 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
           />
         </div>
-        <div className="relative">
-          <select
-            value={deptFilter}
-            onChange={(e) => setDeptFilter(e.target.value)}
-            className="bg-slate-900 border border-slate-800 rounded-xl py-2.5 px-4 text-xs text-white focus:outline-none focus:border-indigo-500"
-          >
-            <option value="">All Departments</option>
-            <option value="Computer Science & Engineering">Computer Science & Engineering</option>
-            <option value="Information Science & Engineering">Information Science & Engineering</option>
-            <option value="Electronics & Communication">Electronics & Communication</option>
-          </select>
-        </div>
+        <select
+          value={deptFilter}
+          onChange={(e) => setDeptFilter(e.target.value)}
+          className="px-3.5 py-2.5 rounded-xl bg-slate-900 border border-slate-800 text-xs text-slate-300 focus:outline-none focus:border-indigo-500"
+        >
+          <option value="">All Departments</option>
+          <option value="Computer Science & Engineering">Computer Science & Engineering</option>
+          <option value="Information Science & Engineering">Information Science & Engineering</option>
+          <option value="Electronics & Communication">Electronics & Communication</option>
+        </select>
       </div>
 
       {/* Mentors Table */}
-      <div className="border border-slate-800 rounded-2xl bg-slate-900/80 overflow-hidden backdrop-blur-md">
+      <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-4">
         {loading ? (
-          <div className="p-8 text-center text-slate-400 text-xs">Loading mentor directory...</div>
+          <div className="text-center py-12 text-slate-500 text-xs font-semibold">Loading institutional mentor records...</div>
+        ) : filteredMentors.length === 0 ? (
+          <div className="text-center py-12 text-slate-500 text-xs">No faculty mentors found matching your filters.</div>
         ) : (
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto rounded-xl border border-slate-800">
             <table className="w-full text-left border-collapse text-xs">
               <thead className="bg-slate-950/80 border-b border-slate-800 text-slate-400 uppercase font-bold text-[11px] tracking-wider">
                 <tr>
                   <th className="p-4">Staff ID</th>
                   <th className="p-4">Mentor Name</th>
                   <th className="p-4">Department</th>
-                  <th className="p-4">Contact</th>
+                  <th className="p-4">Status</th>
+                  <th className="p-4">Contact Phone</th>
                   <th className="p-4">Active Mentees</th>
                   <th className="p-4 text-right">Actions</th>
                 </tr>
@@ -161,6 +239,17 @@ export const MentorManagement: React.FC<MentorManagementProps> = ({ onSelectMent
                       </div>
                     </td>
                     <td className="p-4 font-medium text-slate-300">{m.department}</td>
+                    <td className="p-4">
+                      <span
+                        className={`px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase ${
+                          m.status === 'inactive' || (m as any).status === 'deactivated'
+                            ? 'bg-amber-950/60 text-amber-400 border border-amber-800/60'
+                            : 'bg-emerald-950/60 text-emerald-400 border border-emerald-800/60'
+                        }`}
+                      >
+                        {m.status === 'inactive' || (m as any).status === 'deactivated' ? 'Inactive' : 'Active'}
+                      </span>
+                    </td>
                     <td className="p-4 text-slate-400">{m.phone || 'N/A'}</td>
                     <td className="p-4">
                       <span className="px-2.5 py-1 rounded-lg bg-indigo-950 border border-indigo-800/60 text-indigo-300 font-bold">
@@ -172,13 +261,30 @@ export const MentorManagement: React.FC<MentorManagementProps> = ({ onSelectMent
                         onClick={() => onSelectMentor(m)}
                         className="px-3 py-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 font-bold border border-indigo-500/30 transition-all inline-flex items-center gap-1"
                       >
-                        <Eye className="w-3.5 h-3.5" /> View Details
+                        <Eye className="w-3.5 h-3.5" /> Details
                       </button>
+
+                      {m.status === 'inactive' || (m as any).status === 'deactivated' ? (
+                        <button
+                          onClick={() => handleReactivate(m)}
+                          className="px-2.5 py-1.5 rounded-lg bg-emerald-950/40 hover:bg-emerald-900/60 text-emerald-300 font-bold border border-emerald-800/40 transition-all inline-flex items-center gap-1"
+                        >
+                          <UserCheck className="w-3.5 h-3.5" /> Activate
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => handleDeactivate(m)}
+                          className="px-2.5 py-1.5 rounded-lg bg-amber-950/40 hover:bg-amber-900/60 text-amber-300 font-bold border border-amber-800/40 transition-all inline-flex items-center gap-1"
+                        >
+                          <UserX className="w-3.5 h-3.5" /> Deactivate
+                        </button>
+                      )}
+
                       <button
-                        onClick={() => handleDeactivate(m)}
+                        onClick={() => handleDelete(m)}
                         className="px-2.5 py-1.5 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 font-bold border border-rose-800/40 transition-all inline-flex items-center gap-1"
                       >
-                        <UserX className="w-3.5 h-3.5" /> Deactivate
+                        <Trash2 className="w-3.5 h-3.5" /> Delete
                       </button>
                     </td>
                   </tr>
@@ -192,6 +298,13 @@ export const MentorManagement: React.FC<MentorManagementProps> = ({ onSelectMent
       {/* Create Mentor Modal */}
       <Modal isOpen={isCreateModalOpen} onClose={() => setIsCreateModalOpen(false)} title="Create Faculty Mentor" subtitle="Onboard a new mentor into institutional records">
         <form onSubmit={handleCreateMentor} className="space-y-4">
+          {createError && (
+            <div className="p-3 rounded-xl bg-rose-950/60 border border-rose-800 text-rose-300 text-xs flex items-center gap-2">
+              <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0" />
+              <span>{createError}</span>
+            </div>
+          )}
+
           <div>
             <label className="block text-xs font-semibold text-slate-300 mb-1">Staff / Employee ID</label>
             <input
@@ -229,12 +342,15 @@ export const MentorManagement: React.FC<MentorManagementProps> = ({ onSelectMent
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1">Phone Number</label>
+            <label className="block text-xs font-semibold text-slate-300 mb-1">
+              Phone Number <span className="text-amber-400 font-bold">* Required (Initial Password)</span>
+            </label>
             <input
               type="text"
+              required
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
-              placeholder="+1 (555) 000-0000"
+              placeholder="e.g. 9000000003"
               className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs text-white focus:outline-none focus:border-indigo-500"
             />
           </div>

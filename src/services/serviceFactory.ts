@@ -14,7 +14,8 @@ import { FirebaseStorageService } from './firebase/FirebaseStorageService';
 import { AIServiceImpl } from './ai/AIServiceImpl';
 import { isFirebaseConfigured } from './firebase/firebaseConfig';
 
-const isDemoMode = import.meta.env.VITE_DEMO_MODE === 'true' || !isFirebaseConfigured;
+const env = (typeof import.meta !== 'undefined' && import.meta.env) ? import.meta.env : (process.env || {});
+const isDemoMode = env.VITE_DEMO_MODE === 'true' || !isFirebaseConfigured;
 
 console.log(`[EduMentorX] Running in ${isDemoMode ? 'DEMO MODE (Local IndexedDB Seed)' : 'PRODUCTION MODE (Firebase)'}`);
 

@@ -2,6 +2,13 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { createInitialAdminAccount, checkAdminStatus } from './initAdminService.js';
+import {
+  createMentorAuthAccount,
+  deactivateMentorAccount,
+  reactivateMentorAccount,
+  deleteMentorAccount,
+  createAuthAccountWithPhonePassword,
+} from './accountService.js';
 
 dotenv.config();
 
@@ -40,6 +47,74 @@ app.post('/api/admin/init-initial-admin', async (req, res) => {
   } catch (err) {
     console.error('[Admin Init Error]:', err.message);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Create Mentor Endpoint (Auth Account + Firestore Profile)
+app.post('/api/admin/create-mentor', async (req, res) => {
+  try {
+    const { name, email, phone, department, staffId, actorId } = req.body;
+    const result = await createMentorAuthAccount({ name, email, phone, department, staffId, actorId });
+    res.status(201).json(result);
+  } catch (err) {
+    console.error('[Create Mentor Error]:', err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Deactivate Mentor Endpoint (Disables Auth + Firestore Status Inactive)
+app.post('/api/admin/deactivate-mentor', async (req, res) => {
+  try {
+    const { mentorId, actorId } = req.body;
+    if (!mentorId) return res.status(400).json({ error: 'mentorId is required.' });
+    const result = await deactivateMentorAccount({ mentorId, actorId });
+    res.json(result);
+  } catch (err) {
+    console.error('[Deactivate Mentor Error]:', err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Reactivate Mentor Endpoint (Enables Auth + Firestore Status Active)
+app.post('/api/admin/reactivate-mentor', async (req, res) => {
+  try {
+    const { mentorId, actorId } = req.body;
+    if (!mentorId) return res.status(400).json({ error: 'mentorId is required.' });
+    const result = await reactivateMentorAccount({ mentorId, actorId });
+    res.json(result);
+  } catch (err) {
+    console.error('[Reactivate Mentor Error]:', err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Delete Mentor Endpoint (Deletes Auth User + Firestore Doc)
+app.post('/api/admin/delete-mentor', async (req, res) => {
+  try {
+    const { mentorId, actorId } = req.body;
+    if (!mentorId) return res.status(400).json({ error: 'mentorId is required.' });
+    const result = await deleteMentorAccount({ mentorId, actorId });
+    res.json(result);
+  } catch (err) {
+    console.error('[Delete Mentor Error]:', err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Create Mentor/Student Auth Account Endpoint (Generic)
+app.post('/api/admin/create-user-auth', async (req, res) => {
+  try {
+    const { email, phone, role, name, department } = req.body;
+
+    if (!email || !role) {
+      return res.status(400).json({ error: 'email and role are required.' });
+    }
+
+    const result = await createAuthAccountWithPhonePassword({ email, phone, role, name, department });
+    res.status(201).json(result);
+  } catch (err) {
+    console.error('[Create User Auth Error]:', err.message);
+    res.status(400).json({ error: err.message });
   }
 });
 

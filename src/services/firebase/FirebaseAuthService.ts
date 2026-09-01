@@ -1,8 +1,8 @@
 import { IAuthService, LoginCredentials } from '../interfaces/IAuthService';
 import { User, UserRole } from '../../types';
 import { auth, db, isFirebaseConfigured } from './firebaseConfig';
-import { signInWithEmailAndPassword, signOut, onAuthStateChanged as firebaseOnAuthChanged } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
+import { updatePassword, signInWithEmailAndPassword, signOut, onAuthStateChanged as firebaseOnAuthChanged } from 'firebase/auth';
+import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { DemoAuthService } from '../demo/DemoAuthService';
 
 export class FirebaseAuthService implements IAuthService {
@@ -26,8 +26,29 @@ export class FirebaseAuthService implements IAuthService {
     if (!isFirebaseConfigured || !auth) {
       return this.fallback.login(credentials);
     }
-    const res = await signInWithEmailAndPassword(auth, credentials.email, credentials.password || 'password123');
-    return this.buildUserFromFbUser(res.user, credentials.role);
+
+    const cleanEmail = (credentials.email || '').trim().toLowerCase();
+    const rawPassword = (credentials.password || '').trim();
+    const phoneDigits = rawPassword.replace(/\D/g, '');
+
+    try {
+      const res = await signInWithEmailAndPassword(auth, cleanEmail, rawPassword);
+      return this.buildUserFromFbUser(res.user, credentials.role);
+    } catch (primaryErr: any) {
+      if (
+        (primaryErr.code === 'auth/invalid-credential' || primaryErr.code === 'auth/wrong-password') &&
+        phoneDigits.length >= 6 &&
+        phoneDigits !== rawPassword
+      ) {
+        try {
+          const resFallback = await signInWithEmailAndPassword(auth, cleanEmail, phoneDigits);
+          return this.buildUserFromFbUser(resFallback.user, credentials.role);
+        } catch {
+          // Keep primary error
+        }
+      }
+      throw primaryErr;
+    }
   }
 
   async logout(): Promise<void> {
@@ -41,6 +62,25 @@ export class FirebaseAuthService implements IAuthService {
     if (!isFirebaseConfigured || !auth) {
       return this.fallback.changePassword(oldPassword, newPassword);
     }
+
+    const current = auth.currentUser;
+    if (!current) throw new Error('No authenticated user found.');
+
+    // 1. Update Firebase Auth Password securely
+    await updatePassword(current, newPassword);
+
+    // 2. Update Firestore /users/{uid} document
+    if (db) {
+      try {
+        await updateDoc(doc(db, 'users', current.uid), {
+          mustChangePassword: false,
+          updatedAt: new Date().toISOString(),
+        });
+      } catch (err) {
+        console.warn('Failed to update mustChangePassword flag in Firestore:', err);
+      }
+    }
+
     return true;
   }
 
@@ -63,6 +103,7 @@ export class FirebaseAuthService implements IAuthService {
     let name = fbUser.displayName || fbUser.email?.split('@')[0] || 'User';
     let department = 'Institutional Administration';
     let mustChangePassword = false;
+    let phone = '';
 
     // 1. Inspect custom claims
     try {
@@ -87,6 +128,7 @@ export class FirebaseAuthService implements IAuthService {
           if (data.role) role = data.role as UserRole;
           if (data.name) name = data.name;
           if (data.department) department = data.department;
+          if (data.phone) phone = data.phone;
           if (typeof data.mustChangePassword === 'boolean') mustChangePassword = data.mustChangePassword;
         }
       } catch (err) {
@@ -100,6 +142,7 @@ export class FirebaseAuthService implements IAuthService {
       name,
       role,
       department,
+      phone,
       mustChangePassword,
     };
   }

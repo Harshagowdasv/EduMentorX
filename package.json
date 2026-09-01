@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "start": "node server/index.js",
     "build": "tsc && vite build",
     "lint": "tsc --noEmit",
     "preview": "vite preview",

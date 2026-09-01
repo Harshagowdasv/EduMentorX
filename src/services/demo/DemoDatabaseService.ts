@@ -74,8 +74,9 @@ export class DemoDatabaseService implements IDatabaseService {
   }
 
   private async ensureIndexedDBInitialized(): Promise<void> {
-    const isInit = localStorage.getItem(KEY_INIT);
-    if (!isInit) {
+    const isBrowser = typeof window !== 'undefined' && typeof localStorage !== 'undefined';
+    const isInit = isBrowser ? localStorage.getItem(KEY_INIT) : true;
+    if (!isInit && isBrowser) {
       await idbService.putAll(STORES.MENTORS, initialMentors);
       await idbService.putAll(STORES.STUDENTS, initialStudents);
       await idbService.putAll(STORES.ALLOCATION_HISTORY, initialAllocationHistory);
@@ -176,6 +177,11 @@ export class DemoDatabaseService implements IDatabaseService {
     return newMentor;
   }
 
+  async putMentor(mentor: Mentor): Promise<void> {
+    await this.initPromise;
+    await idbService.put(STORES.MENTORS, mentor);
+  }
+
   async updateMentor(id: string, updates: Partial<Mentor>, actorId: string): Promise<Mentor> {
     await this.initPromise;
     const current = await idbService.getById<Mentor>(STORES.MENTORS, id);
@@ -200,7 +206,32 @@ export class DemoDatabaseService implements IDatabaseService {
   }
 
   async deactivateMentor(id: string, actorId: string): Promise<void> {
-    await this.updateMentor(id, { status: 'deactivated' }, actorId);
+    await this.updateMentor(id, { status: 'inactive' }, actorId);
+  }
+
+  async reactivateMentor(id: string, actorId: string): Promise<void> {
+    await this.updateMentor(id, { status: 'active' }, actorId);
+  }
+
+  async deleteMentor(id: string, actorId: string): Promise<void> {
+    await this.initPromise;
+    const mentor = await this.getMentorById(id);
+    if (!mentor) throw new Error('Mentor not found');
+
+    if (mentor.activeMenteesCount > 0) {
+      throw new Error('This mentor currently has allocated students. Reassign students before permanently deleting this mentor.');
+    }
+
+    await idbService.delete(STORES.MENTORS, id);
+    await this.logAuditEvent({
+      actorId,
+      actorName: 'Admin User',
+      actorRole: 'admin',
+      action: 'DELETE_MENTOR',
+      targetType: 'Mentor',
+      targetId: id,
+      details: `Deleted mentor ${mentor.name}. Historical records preserved.`,
+    });
   }
 
   // Students

@@ -40,6 +40,8 @@ export interface IDatabaseService {
   createMentor(mentor: Omit<Mentor, 'id' | 'createdAt' | 'activeMenteesCount' | 'status'>, actorId: string): Promise<Mentor>;
   updateMentor(id: string, updates: Partial<Mentor>, actorId: string): Promise<Mentor>;
   deactivateMentor(id: string, actorId: string): Promise<void>;
+  reactivateMentor(id: string, actorId: string): Promise<void>;
+  deleteMentor(id: string, actorId: string): Promise<void>;
 
   // Students
   getStudents(page?: number, limit?: number, filters?: any): Promise<{ students: Student[]; total: number }>;
