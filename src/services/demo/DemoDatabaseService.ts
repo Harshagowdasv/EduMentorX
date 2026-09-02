@@ -290,12 +290,18 @@ export class DemoDatabaseService implements IDatabaseService {
     return students.filter((s) => s.mentorId === canonicalMentorId || (targetMentor && (s.mentorId === targetMentor.userId || s.mentorEmail === targetMentor.email)));
   }
 
+  async putStudent(student: Student): Promise<void> {
+    await this.initPromise;
+    await idbService.put(STORES.STUDENTS, student);
+    await this.recalculateMentorMenteeCounts();
+  }
+
   async createStudent(
     studentData: Omit<Student, 'id' | 'createdAt' | 'riskLevel' | 'riskReasons'>,
     actorId: string
   ): Promise<Student> {
     await this.initPromise;
-    const newId = `s_${Date.now()}`;
+    const newId = `s_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const riskEval = calculateExplainableRisk(studentData);
 
     let mentorName = studentData.mentorName;
@@ -677,7 +683,7 @@ export class DemoDatabaseService implements IDatabaseService {
     const previousMentorIds: string[] = [];
 
     for (const student of targetStudents) {
-      if (student.mentorId && !options?.reassignAll) {
+      if (student.mentorId === newMentorId) {
         skippedCount++;
         continue;
       }
@@ -1376,14 +1382,16 @@ export class DemoDatabaseService implements IDatabaseService {
   async getCareerGuidance(studentId: string): Promise<CareerGuidance | null> {
     await this.initPromise;
     const list = await idbService.getAll<CareerGuidance>(STORES.CAREER_GUIDANCE);
-    return list.find((c) => c.studentId === studentId) || null;
+    const studentRecords = list.filter((c) => c.studentId === studentId);
+    if (studentRecords.length === 0) return null;
+    return studentRecords.sort((a, b) => new Date(b.generatedAt).getTime() - new Date(a.generatedAt).getTime())[0];
   }
 
   async saveCareerGuidance(guidanceData: Omit<CareerGuidance, 'id' | 'generatedAt'>): Promise<CareerGuidance> {
     await this.initPromise;
     const newGuidance: CareerGuidance = {
       ...guidanceData,
-      id: `cg_${Date.now()}`,
+      id: `cg_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       generatedAt: new Date().toISOString(),
     };
     await idbService.put(STORES.CAREER_GUIDANCE, newGuidance);
@@ -1457,11 +1465,14 @@ export class DemoDatabaseService implements IDatabaseService {
     return newEvt;
   }
 
-  // Intervention Center
   async getInterventions(filter?: { mentorId?: string; studentId?: string; status?: string }): Promise<InterventionRecord[]> {
     await this.initPromise;
     let list = await idbService.getAll<InterventionRecord>(STORES.INTERVENTIONS);
-    if (filter?.mentorId) list = list.filter((i) => i.mentorId === filter.mentorId);
+    if (filter?.mentorId) {
+      const mentees = await this.getStudentsByMentorId(filter.mentorId);
+      const menteeStudentIds = new Set(mentees.map((s) => s.id));
+      list = list.filter((i) => i.mentorId === filter.mentorId || menteeStudentIds.has(i.studentId));
+    }
     if (filter?.studentId) list = list.filter((i) => i.studentId === filter.studentId);
     if (filter?.status) list = list.filter((i) => i.status === filter.status);
     return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());

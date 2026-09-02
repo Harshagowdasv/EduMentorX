@@ -342,11 +342,13 @@ export interface CSVRowValidationResult {
 export interface CSVImportResult {
   totalRows: number;
   successfulCount: number;
+  importedCount?: number;
   updatedCount: number;
   skippedCount: number;
   failedCount: number;
   duplicateCount: number;
   mentorAllocationErrorCount: number;
+  details?: CSVRowValidationResult[];
   errors: {
     rowNumber: number;
     usn?: string;
@@ -387,6 +389,7 @@ export interface FollowUpTask {
   priority: 'HIGH' | 'MEDIUM' | 'LOW';
   status: 'TODO' | 'IN_PROGRESS' | 'COMPLETED' | 'OVERDUE';
   createdAt: string;
+  interventionId?: string;
 }
 
 export interface StudentGoal {
@@ -445,13 +448,32 @@ export interface ResumeAnalysis {
   analyzedAt: string;
 }
 
+export type PlacementReadinessStatus =
+  | 'INSUFFICIENT_DATA'
+  | 'EARLY_STAGE'
+  | 'INTERMEDIATE'
+  | 'PLACEMENT_READY';
+
+export interface SkillGapItem {
+  skill: string;
+  category: 'strong' | 'needs_improvement' | 'missing';
+  priority: 'CRITICAL' | 'RECOMMENDED' | 'OPTIONAL';
+}
+
 export interface CareerGuidance {
   id: string;
   studentId: string;
+  targetRole?: string;
+  targetDomain?: string;
   suggestedPaths: string[];
   skillGaps: string[];
+  skillDetails?: SkillGapItem[];
   recommendedTopics: string[];
   projectIdeas: string[];
+  certificationsToAcquire?: string[];
+  readinessScore?: number;
+  readinessStatus?: PlacementReadinessStatus;
+  readinessReasons?: string[];
   generatedAt: string;
 }
 
@@ -511,13 +533,23 @@ export interface AcademicCalendarEvent {
 
 export type StudentTrendStatus = 'STABLE' | 'IMPROVING' | 'DECLINING' | 'SIGNIFICANT_DECLINE';
 
+export type InterventionCategory =
+  | 'Academic'
+  | 'Attendance'
+  | 'Backlog'
+  | 'Study Discipline'
+  | 'Financial'
+  | 'Career'
+  | 'General Support';
+
 export type InterventionStatus =
   | 'IDENTIFIED'
   | 'CONTACT_PENDING'
   | 'MEETING_SCHEDULED'
   | 'IN_PROGRESS'
   | 'MONITORING'
-  | 'RESOLVED';
+  | 'RESOLVED'
+  | 'CLOSED';
 
 export interface InterventionRecord {
   id: string;
@@ -527,16 +559,21 @@ export interface InterventionRecord {
   mentorId: string;
   mentorName: string;
   createdAt: string;
+  category?: InterventionCategory;
+  description?: string;
+  followUpDate?: string;
   priority: RiskLevel;
   triggerReasons: string[];
   status: InterventionStatus;
   actionsTaken: string[];
   meetingId?: string;
+  meetingNotes?: string;
   followUpTaskIds: string[];
   baselineCgpa: number;
   baselineAttendance: number;
   outcomeCgpa?: number;
   outcomeAttendance?: number;
+  outcomeNotes?: string;
   resolvedAt?: string;
 }
 

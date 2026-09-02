@@ -1,5 +1,6 @@
 import { IAIService, AIChatMessage, AIResponse, AISafetyAssessment } from '../interfaces/IAIService';
 import { evaluateMessageSafety } from '../aiSafetyEngine';
+import { auth } from '../firebase/firebaseConfig';
 
 export class AIServiceImpl implements IAIService {
   async chat(
@@ -28,15 +29,35 @@ export class AIServiceImpl implements IAIService {
       };
     }
 
-    // 2. Try sending request to secure server endpoint /api/ai/chat
+    const isDemoMode = import.meta.env.VITE_DEMO_MODE === 'true';
+
+    // 2. Demo Mode -> Local AI fallback engine
+    if (isDemoMode) {
+      const localResponse = this.generateLocalAIResponse(studentMessage, studentContext);
+      return {
+        text: localResponse.text,
+        emotion: localResponse.emotion,
+        safety: safetyAssessment,
+      };
+    }
+
+    // 3. Production Mode -> Call secure server endpoint /api/ai/chat with ID Token
     try {
+      const idToken = auth?.currentUser ? await auth.currentUser.getIdToken() : '';
+
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (idToken) {
+        headers['Authorization'] = `Bearer ${idToken}`;
+      }
+
       const response = await fetch('/api/ai/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           message: studentMessage,
           history,
-          context: studentContext,
         }),
       });
 
@@ -46,20 +67,24 @@ export class AIServiceImpl implements IAIService {
           return {
             text: data.text,
             emotion: data.emotion || 'speaking',
-            safety: safetyAssessment,
+            safety: data.safety || safetyAssessment,
           };
         }
+      } else {
+        const errData = await response.json().catch(() => ({}));
+        return {
+          text: errData.error || 'AI Mentor is temporarily unavailable. Please try again.',
+          emotion: 'concerned',
+          safety: safetyAssessment,
+        };
       }
-    } catch {
-      // Backend unavailable or offline -> fallback seamlessly to local AI engine
+    } catch (err) {
+      console.error('[AI Service Error]:', err);
     }
 
-    // 3. Fallback Local Intelligence Engine (Interactive EdTech Assistant)
-    const localResponse = this.generateLocalAIResponse(studentMessage, studentContext);
-
     return {
-      text: localResponse.text,
-      emotion: localResponse.emotion,
+      text: 'AI Mentor is temporarily unavailable. Please try again.',
+      emotion: 'concerned',
       safety: safetyAssessment,
     };
   }

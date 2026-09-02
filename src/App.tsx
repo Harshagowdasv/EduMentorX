@@ -34,8 +34,10 @@ import { AcademicCalendarManager } from './components/academic/AcademicCalendarM
 import { SemesterManager } from './components/academic/SemesterManager';
 import { MentorEffectiveness } from './components/governance/MentorEffectiveness';
 import { DataBackupExportManager } from './components/governance/DataBackupExportManager';
+import { AcademicRiskEarlyWarning } from './components/analytics/AcademicRiskEarlyWarning';
 
 // Mentor Views (Phases 1, 2 & 3)
+import { MentorCommandCenter } from './components/mentor/MentorCommandCenter';
 import { MenteesList } from './components/mentor/MenteesList';
 import { AISafetyAlertsDashboard } from './components/mentor/AISafetyAlertsDashboard';
 import { SmartMentorRecommendations } from './components/workflow/SmartMentorRecommendations';
@@ -51,6 +53,7 @@ import { AchievementBadges } from './components/ai-tools/AchievementBadges';
 import { AIStudyPlanner } from './components/ai-tools/AIStudyPlanner';
 import { AIResumeAssistant } from './components/ai-tools/AIResumeAssistant';
 import { AICareerGuidance } from './components/ai-tools/AICareerGuidance';
+import { StudentCareerPlacementIntelligence } from './components/student/StudentCareerPlacementIntelligence';
 import { StudentProgressTimeline } from './components/workflow/StudentProgressTimeline';
 import { AIMemoryManager } from './components/ai-intelligence/AIMemoryManager';
 import { VisualCareerRoadmap } from './components/ai-intelligence/VisualCareerRoadmap';
@@ -83,9 +86,42 @@ const MainApp: React.FC = () => {
   React.useEffect(() => {
     if (user && user.role === 'student') {
       dbService.getStudentById(user.id).then((s) => {
-        if (s) setStudentProfile(s);
-        else {
-          dbService.getStudentById('s1').then((fallbackS) => fallbackS && setStudentProfile(fallbackS));
+        if (s) {
+          setStudentProfile(s);
+        } else {
+          dbService.getStudents(1, 1000).then((res) => {
+            const matchByEmail = res.students.find(x => x.email.toLowerCase() === user.email.toLowerCase());
+            if (matchByEmail) {
+              setStudentProfile(matchByEmail);
+            } else {
+              setStudentProfile({
+                id: user.id,
+                userId: user.id,
+                usn: user.id,
+                name: user.name || 'Student',
+                email: user.email,
+                phone: user.phone || '',
+                parentPhone: user.phone || '',
+                mentorId: null,
+                department: user.department || 'Computer Science & Engineering',
+                program: 'B.Tech',
+                year: '3rd Year',
+                semester: 'Semester 6',
+                section: 'A',
+                admissionYear: '2023',
+                cgpa: 8.0,
+                attendance: 85,
+                financialScore: 5,
+                studyHours: 15,
+                previousYearBacklogs: 0,
+                currentBacklogs: 0,
+                academicStatus: 'Active',
+                riskLevel: 'GOOD_PERFORMANCE',
+                riskReasons: [],
+                createdAt: new Date().toISOString(),
+              });
+            }
+          });
         }
       });
     }
@@ -163,6 +199,14 @@ const MainApp: React.FC = () => {
             <>
               {activeSection === 'executive' && <ExecutiveInstitutionOverview />}
               {activeSection === 'overview' && <AdminDashboardOverview />}
+              {activeSection === 'academic-risk' && (
+                <AcademicRiskEarlyWarning
+                  userRole={user.role}
+                  userId={user.id}
+                  onViewStudent360={(stId) => setSelectedStudent360Id(stId)}
+                  onInitiateIntervention={() => setActiveSection('allocation')}
+                />
+              )}
               {activeSection === 'academic-calendar' && (
                 <AcademicCalendarManager userRole={user.role} userId={user.id} />
               )}
@@ -206,14 +250,29 @@ const MainApp: React.FC = () => {
           {/* MENTOR PORTAL SECTIONS */}
           {user.role === 'mentor' && (
             <>
-              <MentorActionCenter onNavigate={(sec) => setActiveSection(sec)} />
-
-              {(activeSection === 'overview' || activeSection === 'mentees') && (
+              {activeSection === 'overview' && (
+                <MentorCommandCenter
+                  mentorId={user.id}
+                  mentorName={user.name}
+                  onNavigate={(sec) => setActiveSection(sec)}
+                  onViewStudent360={(stId) => setSelectedStudent360Id(stId)}
+                  actorId={user.id}
+                />
+              )}
+              {activeSection === 'mentees' && (
                 <MenteesList
                   mentorId={user.id}
                   mentorName={user.name}
                   onViewStudent360={(stId) => setSelectedStudent360Id(stId)}
                   actorId={user.id}
+                />
+              )}
+              {activeSection === 'academic-risk' && (
+                <AcademicRiskEarlyWarning
+                  userRole={user.role}
+                  userId={user.id}
+                  onViewStudent360={(stId) => setSelectedStudent360Id(stId)}
+                  onInitiateIntervention={() => setActiveSection('intervention-center')}
                 />
               )}
               {activeSection === 'intervention-center' && (
@@ -256,7 +315,7 @@ const MainApp: React.FC = () => {
               {activeSection === 'ai-memory' && <AIMemoryManager student={studentProfile} />}
               {activeSection === 'study-planner' && <AIStudyPlanner student={studentProfile} />}
               {activeSection === 'resume-assistant' && <AIResumeAssistant student={studentProfile} />}
-              {activeSection === 'career-guidance' && <AICareerGuidance student={studentProfile} />}
+              {activeSection === 'career-guidance' && <StudentCareerPlacementIntelligence student={studentProfile} />}
               {activeSection === 'goals' && (
                 <div className="space-y-6">
                   <StudentGoalTracker studentId={studentProfile.id} userRole={user.role} />

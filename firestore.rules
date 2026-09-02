@@ -290,17 +290,19 @@ service cloud.firestore {
     }
 
     match /resumeAnalyses/{id} {
-      allow read, write: if isAdmin() || (isStudent() && resource.data.studentId == request.auth.uid);
+      allow read: if isAdmin() || (isStudent() && (resource.data.studentId == request.auth.uid || isOwner(resource.data.studentId))) || isAssignedMentor(resource.data.studentId);
+      allow write: if isAdmin() || (isStudent() && (request.resource.data.studentId == request.auth.uid || isOwner(request.resource.data.studentId)));
     }
 
     match /careerGuidance/{id} {
-      allow read, write: if isAdmin() || (isStudent() && resource.data.studentId == request.auth.uid);
+      allow read: if isAdmin() || (isStudent() && (resource.data.studentId == request.auth.uid || isOwner(resource.data.studentId))) || isAssignedMentor(resource.data.studentId);
+      allow write: if isAdmin() || (isStudent() && (request.resource.data.studentId == request.auth.uid || isOwner(request.resource.data.studentId)));
     }
 
     // 14. INTERVENTIONS, FEEDBACK, AI SUMMARIES & MEMORIES (Require active allocation)
     match /interventions/{intervId} {
       allow read: if isAdmin() ||
-                  (isMentor() && (resource.data.mentorId == request.auth.uid || resource.data.mentorId == getMentorId()) && isAssignedMentor(resource.data.studentId));
+                  (isMentor() && (resource.data.mentorId == request.auth.uid || resource.data.mentorId == getMentorId() || isAssignedMentor(resource.data.studentId)));
       allow create, update: if isAdmin() || (isMentor() && isAssignedMentor(request.resource.data.studentId));
     }
 

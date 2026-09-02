@@ -2,12 +2,14 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { createInitialAdminAccount, checkAdminStatus } from './initAdminService.js';
+import { adminAuth, adminDb } from './firebaseAdmin.js';
 import {
   createMentorAuthAccount,
   deactivateMentorAccount,
   reactivateMentorAccount,
   deleteMentorAccount,
   createAuthAccountWithPhonePassword,
+  importStudentsBatch,
 } from './accountService.js';
 
 dotenv.config();
@@ -118,51 +120,332 @@ app.post('/api/admin/create-user-auth', async (req, res) => {
   }
 });
 
-// Secure Server-side AI Endpoint
+// Import Students CSV Endpoint (Batch Auth + Firestore Documents)
+app.post('/api/admin/import-students', async (req, res) => {
+  try {
+    const { csvRows, actorId, duplicateStrategy } = req.body;
+    if (!Array.isArray(csvRows)) {
+      return res.status(400).json({ error: 'csvRows array is required in request body.' });
+    }
+    const result = await importStudentsBatch({ csvRows, actorId, duplicateStrategy });
+    res.json(result);
+  } catch (err) {
+    console.error('[Import Students Error]:', err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Rate Limiting Store for AI Endpoint
+const aiRateLimitMap = new Map();
+
+function evaluateMessageSafetyServer(message, history = []) {
+  const lowerMsg = String(message || '').toLowerCase().trim();
+
+  const immediateDangerPatterns = [
+    /\b(end my life|kill myself|suicide|suicidal|want to die|going to die tonight|slash my wrists|take all my pills|goodbye forever|decided to end my life)\b/i,
+    /\b(decided to end|plan to end|cannot go on living|goodbye world)\b/i,
+  ];
+
+  const highConcernPatterns = [
+    /\b(don't see any point in continuing|no point in continuing|no point in living|better off dead|nobody cares if i die|want everything to stop|cannot take this pain anymore)\b/i,
+    /\b(giving up on everything|don't want to wake up|disappear forever|worthless|no reason to live)\b/i,
+  ];
+
+  const casualExemptions = [
+    /\b(stressed because my exams are|stressed about|exam stress|stressed for exam|stressed because of|exams coming|exams are coming|exams near|exams approaching|due date|scared of result|sad because i failed my exam|sad about grade|sad about mark|die of embarrassment|die laughing)\b/i,
+  ];
+
+  const isCasualExempt = casualExemptions.some((pattern) => pattern.test(lowerMsg));
+
+  let severity = 'NORMAL';
+  let reasoning = 'Standard academic / general conversation.';
+  let contextSummary = 'Student inquiring about study, career, or general guidance.';
+
+  if (!isCasualExempt) {
+    if (immediateDangerPatterns.some((pattern) => pattern.test(lowerMsg))) {
+      severity = 'IMMEDIATE_DANGER';
+      reasoning = 'Detected explicit self-harm or suicidal intent requiring immediate crisis safety escalation.';
+      contextSummary = `Student expressed urgent crisis intent: "${message.substring(0, 100)}"`;
+    } else if (highConcernPatterns.some((pattern) => pattern.test(lowerMsg))) {
+      severity = 'HIGH_CONCERN';
+      reasoning = 'Detected severe emotional distress or hopelessness statements indicating self-harm risk.';
+      contextSummary = `Student expressed high emotional concern: "${message.substring(0, 100)}"`;
+    } else if (/\b(sad|depressed|lonely|overwhelmed|struggling|exhausted|stressed|stress)\b/i.test(lowerMsg)) {
+      severity = 'LOW_CONCERN';
+      reasoning = 'Student expressed normal academic pressure or general sadness without self-harm intent.';
+      contextSummary = 'Student mentioned feeling overwhelmed or sad regarding general stress.';
+    }
+  } else {
+    if (/\b(stressed|stress|sad|overwhelmed)\b/i.test(lowerMsg)) {
+      severity = 'LOW_CONCERN';
+      reasoning = 'Student expressed normal academic exam stress without self-harm risk.';
+      contextSummary = 'Student mentioned feeling stressed about upcoming exams or coursework.';
+    }
+  }
+
+  const isEscalated = severity === 'HIGH_CONCERN' || severity === 'IMMEDIATE_DANGER';
+  let supportiveResponse = '';
+
+  if (severity === 'IMMEDIATE_DANGER') {
+    supportiveResponse =
+      "I hear how deeply overwhelmed you are right now, and I care about your safety. You don't have to carry this heavy burden alone. Please reach out right now to someone who can help:\n\n" +
+      "• **National Crisis Helpline**: Call or text **988** (or emergency line 112 / 911)\n" +
+      "• **Student Support Helpline**: Available 24/7 for confidential counseling\n" +
+      "• **Contact Your Faculty Mentor or Campus Health Center**\n\n" +
+      "Please stay safe and talk to a trusted professional or family member right away. Human support resources are being alerted so you receive compassionate care.";
+  } else if (severity === 'HIGH_CONCERN') {
+    supportiveResponse =
+      "Thank you for sharing your feelings with me. It sounds like you are carrying a lot of weight right now. While I am an AI mentor, your well-being matters deeply. " +
+      "I encourage you to reach out to your faculty mentor, a campus counselor, or a loved one. Sharing what you're going through with a trusted human can bring real clarity and relief.";
+  } else if (severity === 'LOW_CONCERN') {
+    supportiveResponse =
+      "It is completely normal to feel stressed or tired when balancing academic responsibilities. Remember to take small breaks, stay hydrated, and break your work into manageable tasks. I'm right here to support your study plan!";
+  } else {
+    supportiveResponse = "I'm here to help you succeed in your academic and career journey! How can we tackle your goals today?";
+  }
+
+  return {
+    severity,
+    contextSummary,
+    confidenceReasoning: reasoning,
+    isEscalated,
+    supportiveResponse,
+  };
+}
+
+// Secure Server-side AI Endpoint (Verified Firebase Auth Token & Context Loading)
 app.post('/api/ai/chat', async (req, res) => {
   try {
-    const { message, history, context } = req.body;
-
-    if (!GEMINI_API_KEY) {
-      return res.status(500).json({ error: 'Server Gemini API key not configured' });
+    // 1. Authentication Verification via Firebase ID Token
+    const authHeader = req.headers.authorization || '';
+    if (!authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Unauthorized. Firebase ID token required in Authorization header.' });
     }
 
-    // Call official Gemini REST API (gemini-1.5-flash) using server secret key
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+    const idToken = authHeader.split('Bearer ')[1].trim();
+    let decodedToken;
+    try {
+      decodedToken = await adminAuth.verifyIdToken(idToken);
+    } catch (err) {
+      console.warn('[AI Endpoint Auth Failed]:', err.message);
+      return res.status(401).json({ error: 'Unauthorized. Invalid or expired Firebase ID token.' });
+    }
 
-    const systemPrompt = `You are EduMentorX AI Avatar Assistant, an empathetic, encouraging EdTech mentor for university students. 
-Student Context: Name: ${context?.name || 'Student'}, CGPA: ${context?.cgpa || 'N/A'}, Attendance: ${context?.attendance || 'N/A'}%, Department: ${context?.department || 'Engineering'}.
-Keep responses helpful, structured, concise, and educational. Clearly identify yourself as an AI assistant.`;
+    const uid = decodedToken.uid;
+    const userRole = decodedToken.role || 'student';
+
+    if (userRole !== 'student' && !decodedToken.student) {
+      return res.status(403).json({ error: 'Forbidden. Only student accounts may access the Student AI Mentor endpoint.' });
+    }
+
+    // 2. Rate / Abuse Protection (Max 1 request per 1.0s per user)
+    const lastReqTime = aiRateLimitMap.get(uid) || 0;
+    const nowTime = Date.now();
+    if (nowTime - lastReqTime < 1000) {
+      return res.status(429).json({ error: 'Too many requests. Please wait a moment before sending another message.' });
+    }
+    aiRateLimitMap.set(uid, nowTime);
+
+    const { message, history } = req.body;
+    if (!message || typeof message !== 'string') {
+      return res.status(400).json({ error: 'message string is required in request body.' });
+    }
+
+    // 3. Safety Risk Assessment (Server-side Safety Engine)
+    const safetyAssessment = evaluateMessageSafetyServer(message, history || []);
+
+    // 4. Fetch Student Document & Context from Firestore (Server-side using adminDb)
+    let studentData = {};
+    try {
+      if (adminDb) {
+        const studentsSnap = await adminDb.collection('students').where('uid', '==', uid).limit(1).get();
+        if (!studentsSnap.empty) {
+          studentData = studentsSnap.docs[0].data();
+        } else {
+          const userDocSnap = await adminDb.collection('users').doc(uid).get();
+          if (userDocSnap.exists) {
+            studentData = userDocSnap.data();
+          }
+        }
+      }
+    } catch (err) {
+      console.warn(`[AI Context Fetch Notice]: Firestore student context read notice for UID (${uid}): ${err.message}. Using safe default context.`);
+    }
+
+    const studentName = studentData.name || decodedToken.name || 'Student';
+    const department = studentData.department || 'Computer Science & Engineering';
+    const cgpa = typeof studentData.cgpa === 'number' ? studentData.cgpa : 8.0;
+    const attendance = typeof studentData.attendance === 'number' ? studentData.attendance : 85;
+    const studyHours = studentData.studyHours || 15;
+    const backlogs = studentData.previousYearBacklogs || studentData.currentBacklogs || 0;
+    const academicStatus = studentData.academicStatus || 'Active';
+    const mentorName = studentData.mentorName || 'Faculty Mentor';
+    const mentorId = studentData.mentorId || null;
+    const careerGoal = studentData.careerGoal || 'Software Engineer';
+    const skills = studentData.skills ? (Array.isArray(studentData.skills) ? studentData.skills.join(', ') : String(studentData.skills)) : 'General Technical Skills';
+
+    // 5. Handle Escalated Safety Risk (HIGH_CONCERN / IMMEDIATE_DANGER)
+    if (safetyAssessment.isEscalated) {
+      try {
+        const fifteenMinsAgo = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+        const existingAlerts = await adminDb.collection('safetyAlerts')
+          .where('studentId', '==', studentData.usn || uid)
+          .where('timestamp', '>=', fifteenMinsAgo)
+          .limit(1)
+          .get();
+
+        if (existingAlerts.empty) {
+          const alertRef = adminDb.collection('safetyAlerts').doc();
+          await alertRef.set({
+            id: alertRef.id,
+            studentId: studentData.usn || uid,
+            studentName,
+            studentUsn: studentData.usn || uid,
+            mentorId: mentorId || 'ADMIN_UNASSIGNED',
+            severity: safetyAssessment.severity,
+            triggerMessage: message.substring(0, 200),
+            contextSummary: safetyAssessment.contextSummary,
+            confidenceReasoning: safetyAssessment.confidenceReasoning,
+            status: 'NEW',
+            timestamp: new Date().toISOString(),
+          });
+
+          const recipientId = mentorId || 'admin';
+          const recipientRole = mentorId ? 'mentor' : 'admin';
+          await adminDb.collection('notifications').add({
+            id: `notif_${Date.now()}`,
+            recipientUserId: recipientId,
+            recipientRole,
+            title: `Safety Alert: ${studentName}`,
+            message: `Confidential safety assessment triggered (${safetyAssessment.severity}) for ${studentName}.`,
+            type: 'safety_alert',
+            severity: safetyAssessment.severity,
+            read: false,
+            timestamp: new Date().toISOString(),
+          });
+
+          console.log(`[Safety Engine] Confidential alert created for ${studentName} (${safetyAssessment.severity}).`);
+        }
+      } catch (alertErr) {
+        console.warn('[Safety Alert Creation Notice]:', alertErr.message);
+      }
+
+      return res.json({
+        text: safetyAssessment.supportiveResponse,
+        emotion: 'concerned',
+        safety: safetyAssessment,
+      });
+    }
+
+    // 6. Gemini API Call (Production Mode)
+    if (!GEMINI_API_KEY) {
+      console.warn('[Gemini API Notice]: GEMINI_API_KEY not configured on server.');
+      return res.status(503).json({ error: 'AI Mentor is temporarily unavailable. Please try again.' });
+    }
+
+    const systemPrompt = `You are EduMentorX AI Academic Assistant, an empathetic, encouraging EdTech educational mentor for university students. 
+Identity: Clearly identify yourself as an AI academic assistant, NOT a human faculty member.
+Student Context:
+- Name: ${studentName}
+- Department: ${department}
+- Academic Record: CGPA ${cgpa.toFixed(2)}/10, Lecture Attendance ${attendance}%, Study Hours ${studyHours} hrs/week
+- Backlogs: ${backlogs} subject(s), Academic Status: ${academicStatus}
+- Target Career Role: ${careerGoal}
+- Current Technical Skills: ${skills}
+- Assigned Faculty Mentor: ${mentorName}
+
+Guidelines:
+- Provide structured, practical academic, study habit, project, and career guidance tailored to the student's context.
+- If attendance is low (<75%), provide actionable advice to prioritize lectures and catch up.
+- If backlogs exist, help prioritize subjects and build a manageable study plan.
+- Align career guidance with their target role (${careerGoal}) and suggest practical skill improvements.
+- Encourage healthy study habits and consulting with ${mentorName} for official department queries.
+- Keep responses clear, warm, concise, and structured with markdown formatting.`;
+
+    const formattedHistory = (history || []).map((h) => ({
+      role: h.role === 'model' ? 'model' : 'user',
+      parts: [{ text: h.text }],
+    }));
 
     const contents = [
+      ...formattedHistory,
       {
         role: 'user',
-        parts: [{ text: `${systemPrompt}\n\nUser Question: ${message}` }],
+        parts: [{ text: `${systemPrompt}\n\nStudent Message: ${message}` }],
       },
     ];
 
-    const geminiRes = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents }),
-    });
+    // Helper to sanitize log output to prevent leaking secret API key
+    const sanitizeLogOutput = (input) => {
+      if (!input) return '';
+      let str = typeof input === 'string' ? input : JSON.stringify(input);
+      if (GEMINI_API_KEY) {
+        str = str.split(GEMINI_API_KEY).join('[REDACTED_API_KEY]');
+      }
+      return str.replace(/key=[A-Za-z0-9._-]+/g, 'key=[REDACTED_API_KEY]');
+    };
 
-    if (!geminiRes.ok) {
-      const errorText = await geminiRes.text();
-      console.error('Gemini API error:', errorText);
-      return res.status(500).json({ error: 'Gemini API call failed' });
+    // Candidate supported Gemini models in order of preference
+    const geminiCandidateModels = ['gemini-3.6-flash', 'gemini-3.1-flash-lite', 'gemini-3.5-flash'];
+
+    let responseText = null;
+    let lastErrorMsg = '';
+
+    for (const modelName of geminiCandidateModels) {
+      try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${GEMINI_API_KEY}`;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 20000);
+
+        let geminiRes = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents }),
+          signal: controller.signal,
+        }).finally(() => clearTimeout(timeoutId));
+
+        // Handle transient 503 high demand spike with a quick 250ms retry
+        if (geminiRes.status === 503) {
+          console.warn(`[Gemini API Warning]: Model ${modelName} returned HTTP 503. Retrying in 250ms...`);
+          await new Promise((r) => setTimeout(r, 250));
+          const retryController = new AbortController();
+          const retryTimeoutId = setTimeout(() => retryController.abort(), 20000);
+          geminiRes = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents }),
+            signal: retryController.signal,
+          }).finally(() => clearTimeout(retryTimeoutId));
+        }
+
+        if (geminiRes.ok) {
+          const geminiData = await geminiRes.json();
+          responseText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || null;
+          if (responseText) break;
+        } else {
+          const errText = await geminiRes.text();
+          lastErrorMsg = sanitizeLogOutput(`Model ${modelName} returned HTTP ${geminiRes.status}: ${errText}`);
+          console.warn('[Gemini API Attempt Failed]:', lastErrorMsg);
+        }
+      } catch (reqErr) {
+        lastErrorMsg = sanitizeLogOutput(`Model ${modelName} request error: ${reqErr.message}`);
+        console.warn('[Gemini API Request Error]:', lastErrorMsg);
+      }
     }
 
-    const data = await geminiRes.json();
-    const candidate = data.candidates?.[0]?.content?.parts?.[0]?.text || 'I am happy to assist you with your academic goals!';
+    if (!responseText) {
+      console.error('[Gemini Backend Error]: All Gemini model attempts failed. Last error:', lastErrorMsg);
+      return res.status(503).json({ error: 'AI Mentor is temporarily unavailable. Please try again.' });
+    }
 
-    res.json({
-      text: candidate,
+    return res.json({
+      text: responseText,
       emotion: 'speaking',
+      safety: safetyAssessment,
     });
   } catch (err) {
-    console.error('Server error processing AI chat:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('[AI Chat Endpoint Error]:', err.message);
+    return res.status(500).json({ error: 'AI Mentor is temporarily unavailable. Please try again.' });
   }
 });
 

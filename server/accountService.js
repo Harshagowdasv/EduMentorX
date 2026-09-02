@@ -379,3 +379,321 @@ export async function createAuthAccountWithPhonePassword({ email, phone, role, n
     mustChangePassword: true,
   };
 }
+
+// 6. Batch Import Student Accounts via CSV (Optimized Bulk Pre-Check, Concurrency, and WriteBatch)
+export async function importStudentsBatch({ csvRows, actorId, duplicateStrategy = 'skip' }) {
+  if (!isInitialized || !adminAuth || !adminDb) {
+    throw new Error('Firebase Admin SDK is not initialized on backend server.');
+  }
+
+  if (!Array.isArray(csvRows) || csvRows.length === 0) {
+    throw new Error('No CSV student rows provided for import.');
+  }
+
+  const startTime = Date.now();
+  const results = new Array(csvRows.length);
+  let importedCount = 0;
+  let skippedCount = 0;
+  let failedCount = 0;
+
+  // 1. Intra-batch pre-filtering & validation
+  const validRowsToProcess = [];
+  const batchUSNs = new Set();
+  const batchEmails = new Set();
+
+  for (let i = 0; i < csvRows.length; i++) {
+    const row = csvRows[i] || {};
+    const rowNumber = i + 1;
+
+    const usn = String(row.usn || row.USN || row.studentId || '').trim().toUpperCase();
+    const name = String(row.name || row.Name || row.studentName || '').trim();
+    const email = String(row.email || row.Email || row.studentEmail || '').trim().toLowerCase();
+    const phone = String(row.phone || row.phoneNumber || row['Phone Number'] || '').trim();
+    const phoneDigits = phone.replace(/\D/g, '') || '9000000000';
+    const department = String(row.department || row.Department || 'Computer Science & Engineering').trim();
+
+    if (!usn || !name || !email) {
+      failedCount++;
+      results[i] = {
+        rowNumber,
+        usn: usn || 'N/A',
+        name: name || 'N/A',
+        email: email || 'N/A',
+        status: 'failed',
+        reason: 'Missing required master data (USN, Name, or Email).',
+      };
+      continue;
+    }
+
+    if (!/\S+@\S+\.\S+/.test(email)) {
+      failedCount++;
+      results[i] = {
+        rowNumber,
+        usn,
+        name,
+        email,
+        status: 'failed',
+        reason: `Invalid email format: '${email}'`,
+      };
+      continue;
+    }
+
+    // Intra-batch duplicate check
+    if (batchUSNs.has(usn) || batchEmails.has(email)) {
+      skippedCount++;
+      results[i] = {
+        rowNumber,
+        usn,
+        name,
+        email,
+        status: 'skipped',
+        reason: `Duplicate row in CSV batch for USN '${usn}' or Email '${email}'.`,
+      };
+      continue;
+    }
+
+    batchUSNs.add(usn);
+    batchEmails.add(email);
+
+    validRowsToProcess.push({
+      index: i,
+      rowNumber,
+      usn,
+      name,
+      email,
+      phone,
+      phoneDigits,
+      department,
+      rawData: row,
+    });
+  }
+
+  if (validRowsToProcess.length === 0) {
+    return {
+      success: true,
+      importedCount: 0,
+      skippedCount,
+      failedCount,
+      totalRows: csvRows.length,
+      results,
+    };
+  }
+
+  // 2. Pre-fetch existing students from Firestore in a single bulk check to avoid individual reads
+  const existingUSNs = new Set();
+  const existingEmails = new Set();
+
+  try {
+    const studentDocsSnap = await adminDb.collection('students').get();
+    studentDocsSnap.forEach((d) => {
+      existingUSNs.add(d.id.toUpperCase());
+      const data = d.data();
+      if (data.email) existingEmails.add(data.email.toLowerCase());
+    });
+  } catch (err) {
+    console.warn('[Bulk Duplicate Pre-Check Notice]:', err.message);
+  }
+
+  // Filter rows into new vs existing
+  const newStudentRows = [];
+  for (const item of validRowsToProcess) {
+    if (existingUSNs.has(item.usn) || existingEmails.has(item.email)) {
+      skippedCount++;
+      results[item.index] = {
+        rowNumber: item.rowNumber,
+        usn: item.usn,
+        name: item.name,
+        email: item.email,
+        status: 'skipped',
+        reason: `Student account with USN '${item.usn}' or Email '${item.email}' already exists. Password preserved.`,
+      };
+    } else {
+      newStudentRows.push(item);
+    }
+  }
+
+  if (newStudentRows.length === 0) {
+    return {
+      success: true,
+      importedCount: 0,
+      skippedCount,
+      failedCount,
+      totalRows: csvRows.length,
+      results,
+    };
+  }
+
+  // 3. Controlled Concurrency for Firebase Auth Creation & Firestore Batch Write
+  const CONCURRENCY_LIMIT = 5;
+  const now = new Date().toISOString();
+
+  for (let i = 0; i < newStudentRows.length; i += CONCURRENCY_LIMIT) {
+    const chunk = newStudentRows.slice(i, i + CONCURRENCY_LIMIT);
+
+    const chunkResults = await Promise.all(
+      chunk.map(async (item) => {
+        try {
+          let authUser = null;
+          try {
+            authUser = await adminAuth.getUserByEmail(item.email);
+          } catch (e) {
+            if (e.code !== 'auth/user-not-found') throw e;
+          }
+
+          if (authUser) {
+            return {
+              item,
+              status: 'skipped',
+              reason: `Student account with Email '${item.email}' already exists in Firebase Auth. Password preserved.`,
+            };
+          }
+
+          const userRecord = await adminAuth.createUser({
+            email: item.email,
+            displayName: item.name,
+            password: item.phoneDigits.length >= 6 ? item.phoneDigits : '9000000000',
+            emailVerified: true,
+            disabled: false,
+          });
+
+          await adminAuth.setCustomUserClaims(userRecord.uid, {
+            role: 'student',
+            student: true,
+          });
+
+          const studentProfile = {
+            id: item.usn,
+            uid: userRecord.uid,
+            usn: item.usn,
+            name: item.name,
+            email: item.email,
+            phone: item.phone,
+            department: item.department,
+            program: item.rawData.program || 'B.Tech',
+            year: item.rawData.year || '3rd Year',
+            semester: item.rawData.semester || 'Semester 6',
+            section: item.rawData.section || 'A',
+            admissionYear: item.rawData.admissionYear || '2023',
+            cgpa: typeof item.rawData.cgpa === 'number' ? item.rawData.cgpa : parseFloat(item.rawData.cgpa) || 8.0,
+            attendance: typeof item.rawData.attendance === 'number' ? item.rawData.attendance : parseFloat(item.rawData.attendance) || 85,
+            financialScore: parseInt(item.rawData.financialScore) || 5,
+            studyHours: parseFloat(item.rawData.studyHours) || 15,
+            previousYearBacklogs: parseInt(item.rawData.previousYearBacklogs) || 0,
+            currentBacklogs: parseInt(item.rawData.currentBacklogs) || 0,
+            academicStatus: item.rawData.academicStatus || 'Active',
+            riskLevel: item.rawData.riskLevel || 'GOOD_PERFORMANCE',
+            riskReasons: item.rawData.riskReasons || [],
+            createdAt: now,
+          };
+
+          return {
+            item,
+            status: 'success',
+            uid: userRecord.uid,
+            studentProfile,
+          };
+        } catch (err) {
+          return {
+            item,
+            status: 'failed',
+            reason: err.message || 'Failed to create student account.',
+          };
+        }
+      })
+    );
+
+    const batch = adminDb.batch();
+    let hasBatchOps = false;
+
+    for (const resItem of chunkResults) {
+      if (resItem.status === 'success' && resItem.uid && resItem.studentProfile) {
+        const userRef = adminDb.collection('users').doc(resItem.uid);
+        batch.set(userRef, {
+          uid: resItem.uid,
+          id: resItem.uid,
+          name: resItem.item.name,
+          email: resItem.item.email,
+          phone: resItem.item.phone,
+          role: 'student',
+          department: resItem.item.department,
+          status: 'active',
+          createdAt: now,
+          mustChangePassword: true,
+        });
+
+        const studentRef = adminDb.collection('students').doc(resItem.item.usn);
+        batch.set(studentRef, resItem.studentProfile);
+        hasBatchOps = true;
+      }
+    }
+
+    if (hasBatchOps) {
+      try {
+        await batch.commit();
+      } catch (err) {
+        console.warn('[Firestore WriteBatch Notice]:', err.message);
+      }
+    }
+
+    for (const resItem of chunkResults) {
+      if (resItem.status === 'success') {
+        importedCount++;
+        results[resItem.item.index] = {
+          rowNumber: resItem.item.rowNumber,
+          usn: resItem.item.usn,
+          name: resItem.item.name,
+          email: resItem.item.email,
+          status: 'success',
+          student: resItem.studentProfile,
+        };
+      } else if (resItem.status === 'skipped') {
+        skippedCount++;
+        results[resItem.item.index] = {
+          rowNumber: resItem.item.rowNumber,
+          usn: resItem.item.usn,
+          name: resItem.item.name,
+          email: resItem.item.email,
+          status: 'skipped',
+          reason: resItem.reason,
+        };
+      } else {
+        failedCount++;
+        results[resItem.item.index] = {
+          rowNumber: resItem.item.rowNumber,
+          usn: resItem.item.usn,
+          name: resItem.item.name,
+          email: resItem.item.email,
+          status: 'failed',
+          reason: resItem.reason,
+        };
+      }
+    }
+  }
+
+  try {
+    await adminDb.collection('auditLogs').add({
+      id: `log_${Date.now()}`,
+      actorId: actorId || 'admin',
+      actorName: 'Admin User',
+      actorRole: 'admin',
+      action: 'IMPORT_STUDENTS_CSV',
+      targetType: 'StudentBatch',
+      details: `Imported ${importedCount} new students (${skippedCount} skipped, ${failedCount} failed) in ${Date.now() - startTime}ms.`,
+      timestamp: now,
+    });
+  } catch (err) {
+    console.warn('[Audit Log Warning]:', err.message);
+  }
+
+  const durationMs = Date.now() - startTime;
+  console.log(`[PERF Server] CSV Batch Import completed in ${durationMs}ms for ${csvRows.length} rows (${importedCount} imported, ${skippedCount} skipped)`);
+
+  return {
+    success: true,
+    importedCount,
+    skippedCount,
+    failedCount,
+    totalRows: csvRows.length,
+    results,
+  };
+}

@@ -22,7 +22,8 @@ import {
   FileDown,
   Database,
   Brain,
-  Star
+  Star,
+  AlertTriangle
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -47,6 +48,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       return [
         { id: 'executive', label: 'Executive Overview', icon: Building2 },
         { id: 'overview', label: 'Dashboard Overview', icon: LayoutDashboard },
+        { id: 'academic-risk', label: 'Early Warning System', icon: AlertTriangle },
         { id: 'academic-calendar', label: 'Academic Calendar', icon: Calendar },
         { id: 'semester-manager', label: 'Semesters & Terms', icon: Building2 },
         { id: 'mentors', label: 'Faculty Mentors', icon: UserCheck },
@@ -67,6 +69,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     if (role === 'mentor') {
       return [
         { id: 'overview', label: 'My Mentees Portfolio', icon: Users },
+        { id: 'academic-risk', label: 'Early Warning System', icon: AlertTriangle },
         { id: 'intervention-center', label: 'Intervention Center', icon: ShieldAlert },
         { id: 'recommendations', label: 'Students Needing Attention', icon: Flame },
         { id: 'meetings', label: 'Meeting Scheduler', icon: Calendar },
@@ -84,7 +87,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       { id: 'ai-memory', label: 'Controlled AI Memory', icon: Brain },
       { id: 'study-planner', label: 'AI Daily Study Planner', icon: Calendar },
       { id: 'resume-assistant', label: 'AI Resume Assistant', icon: FileCheck },
-      { id: 'career-guidance', label: 'AI Career Guidance', icon: Compass },
+      { id: 'career-guidance', label: 'Career & Placement Intelligence', icon: Compass },
       { id: 'goals', label: 'Goals & Achievements', icon: Target },
       { id: 'academic-calendar', label: 'Academic Calendar', icon: Calendar },
       { id: 'meetings', label: 'Scheduled Meetings', icon: Calendar },

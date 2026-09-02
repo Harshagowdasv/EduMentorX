@@ -261,19 +261,66 @@ export const Student360View: React.FC<Student360ViewProps> = ({
 
             {/* TAB: INTERVENTIONS */}
             {activeTab === 'interventions' && userRole !== 'student' && (
-              <div className="space-y-3">
+              <div className="space-y-4">
                 {interventions.length === 0 ? (
-                  <p className="p-6 text-center text-xs text-slate-400">No intervention records logged for this student.</p>
+                  <p className="p-6 text-center text-xs text-slate-400 bg-slate-950 border border-slate-800 rounded-xl">
+                    No intervention records logged for this student.
+                  </p>
                 ) : (
                   interventions.map((i) => (
-                    <div key={i.id} className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold text-white text-xs font-mono">{i.createdAt.substring(0, 10)}</span>
-                        <span className="px-2 py-0.5 text-[10px] font-bold uppercase rounded bg-rose-950 text-rose-300 border border-rose-800">
-                          {i.status}
+                    <div key={i.id} className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
+                      <div className="flex items-start justify-between">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-white text-xs">{i.category || 'Academic Intervention'}</span>
+                            <span className="text-[10px] text-slate-400 font-mono">({i.createdAt.substring(0, 10)})</span>
+                          </div>
+                          <p className="text-[11px] text-indigo-300 mt-0.5">Initiated by Mentor: <strong>{i.mentorName}</strong></p>
+                        </div>
+                        <span
+                          className={`px-2.5 py-1 text-[10px] font-extrabold uppercase rounded-lg border ${
+                            i.status === 'RESOLVED'
+                              ? 'bg-emerald-950 text-emerald-300 border-emerald-800'
+                              : i.status === 'CLOSED'
+                              ? 'bg-slate-900 text-slate-400 border-slate-800'
+                              : 'bg-rose-950 text-rose-300 border-rose-800'
+                          }`}
+                        >
+                          {i.status.replace('_', ' ')}
                         </span>
                       </div>
-                      <p className="text-xs text-slate-300">Baseline CGPA: {i.baselineCgpa} | Baseline Attendance: {i.baselineAttendance}%</p>
+
+                      {i.description && (
+                        <p className="text-xs text-slate-200 bg-slate-900 p-2.5 rounded-lg border border-slate-800/80">
+                          {i.description}
+                        </p>
+                      )}
+
+                      {/* Metrics comparison */}
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        <div className="p-2 rounded-lg bg-slate-900 border border-slate-800">
+                          <span className="text-[10px] text-slate-400 block">Baseline CGPA</span>
+                          <span className="font-bold text-indigo-300">{i.baselineCgpa}</span>
+                          {i.outcomeCgpa && <span className="text-emerald-400 font-bold ml-2">→ Final: {i.outcomeCgpa}</span>}
+                        </div>
+                        <div className="p-2 rounded-lg bg-slate-900 border border-slate-800">
+                          <span className="text-[10px] text-slate-400 block">Baseline Attendance</span>
+                          <span className="font-bold text-rose-400">{i.baselineAttendance}%</span>
+                          {i.outcomeAttendance && <span className="text-emerald-400 font-bold ml-2">→ Final: {i.outcomeAttendance}%</span>}
+                        </div>
+                      </div>
+
+                      {/* Actions Taken */}
+                      {i.actionsTaken && i.actionsTaken.length > 0 && (
+                        <div className="space-y-1">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase block">Actions Recorded:</span>
+                          {i.actionsTaken.map((act, idx) => (
+                            <p key={idx} className="text-[11px] text-slate-300 bg-slate-900/80 px-2 py-1 rounded border border-slate-800/60">
+                              • {act}
+                            </p>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   ))
                 )}

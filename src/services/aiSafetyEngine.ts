@@ -21,7 +21,7 @@ export function evaluateMessageSafety(
 
   // 3. Normal academic/exam stress or casual emotion exemptions
   const casualExemptions = [
-    /\b(stressed because my exams are near|exam stress|stressed for exam|due date|scared of result|sad because i failed my exam|sad about grade|sad about mark|die of embarrassment|die laughing)\b/i,
+    /\b(stressed because my exams are|stressed about|exam stress|stressed for exam|stressed because of|exams coming|exams are coming|exams near|exams approaching|due date|scared of result|sad because i failed my exam|sad about grade|sad about mark|die of embarrassment|die laughing)\b/i,
   ];
 
   const isCasualExempt = casualExemptions.some((pattern) => pattern.test(lowerMsg));
@@ -39,10 +39,16 @@ export function evaluateMessageSafety(
       severity = 'HIGH_CONCERN';
       reasoning = 'Detected severe emotional distress or hopelessness statements indicating self-harm risk.';
       contextSummary = `Student expressed high emotional concern: "${message.substring(0, 100)}"`;
-    } else if (/\b(sad|depressed|lonely|overwhelmed|struggling|exhausted)\b/i.test(lowerMsg)) {
+    } else if (/\b(sad|depressed|lonely|overwhelmed|struggling|exhausted|stressed|stress)\b/i.test(lowerMsg)) {
       severity = 'LOW_CONCERN';
       reasoning = 'Student expressed normal academic pressure or general sadness without self-harm intent.';
       contextSummary = 'Student mentioned feeling overwhelmed or sad regarding general stress.';
+    }
+  } else {
+    if (/\b(stressed|stress|sad|overwhelmed)\b/i.test(lowerMsg)) {
+      severity = 'LOW_CONCERN';
+      reasoning = 'Student expressed normal academic exam stress without self-harm risk.';
+      contextSummary = 'Student mentioned feeling stressed about upcoming exams or coursework.';
     }
   }
 
