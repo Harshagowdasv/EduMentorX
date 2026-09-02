@@ -30,7 +30,9 @@ import {
   AIMeetingSummary,
   AIMemoryItem,
   MeetingFeedback,
-  StudentTrendStatus
+  StudentTrendStatus,
+  StudentAcademicMark,
+  IAMarksImportResult
 } from '../../types';
 
 export interface IDatabaseService {
@@ -126,11 +128,19 @@ export interface IDatabaseService {
   getCSVImportHistory(): Promise<CSVImportHistoryRecord[]>;
   logCSVImportHistory(record: Omit<CSVImportHistoryRecord, 'id' | 'timestamp'>): Promise<CSVImportHistoryRecord>;
 
-  // Phase 3 Extensions
+  // Phase 3 Extensions & Admin Enhancements
   getAcademicYears(): Promise<AcademicYear[]>;
   createAcademicYear(year: Omit<AcademicYear, 'id'>): Promise<AcademicYear>;
+  updateAcademicYear(id: string, updates: Partial<AcademicYear>): Promise<AcademicYear>;
   getSemesters(): Promise<Semester[]>;
   createSemester(sem: Omit<Semester, 'id'>): Promise<Semester>;
+  updateSemester(id: string, updates: Partial<Semester>): Promise<Semester>;
+  setActiveSemester(semesterId: string): Promise<void>;
+  archiveSemester(semesterId: string): Promise<void>;
+  importIAMarksCSV(rows: Record<string, any>[], academicYear: string, semester: string, actorId: string): Promise<IAMarksImportResult>;
+  getStudentAcademicMarks(studentId: string): Promise<StudentAcademicMark[]>;
+  editStudent(id: string, updates: Partial<Student>, actorId: string): Promise<Student>;
+  deleteStudent(id: string, actorId: string): Promise<void>;
   getCalendarEvents(department?: string, semester?: string): Promise<AcademicCalendarEvent[]>;
   createCalendarEvent(event: Omit<AcademicCalendarEvent, 'id' | 'createdAt'>): Promise<AcademicCalendarEvent>;
   getInterventions(filter?: { mentorId?: string; studentId?: string; status?: string }): Promise<InterventionRecord[]>;

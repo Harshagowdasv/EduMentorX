@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Student, UserRole, InterventionRecord } from '../../types';
+import { Student, UserRole, InterventionRecord, StudentAcademicMark } from '../../types';
 import { dbService } from '../../services/serviceFactory';
 import { Modal } from '../common/Modal';
 import { StudentProgressTimeline } from '../workflow/StudentProgressTimeline';
@@ -23,7 +23,12 @@ import {
   Code,
   Github,
   Linkedin,
-  DollarSign
+  DollarSign,
+  TrendingUp,
+  TrendingDown,
+  Minus,
+  CheckCircle2,
+  FileSpreadsheet
 } from 'lucide-react';
 
 interface Student360ViewProps {
@@ -41,7 +46,8 @@ export const Student360View: React.FC<Student360ViewProps> = ({
 }) => {
   const [student, setStudent] = useState<Student | null>(null);
   const [interventions, setInterventions] = useState<InterventionRecord[]>([]);
-  const [activeTab, setActiveTab] = useState<'overview' | 'biodata' | 'interventions' | 'timeline'>('overview');
+  const [iaMarks, setIaMarks] = useState<StudentAcademicMark[]>([]);
+  const [activeTab, setActiveTab] = useState<'overview' | 'biodata' | 'interventions' | 'ia-marks' | 'timeline'>('overview');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -53,12 +59,14 @@ export const Student360View: React.FC<Student360ViewProps> = ({
   const loadStudent360 = async () => {
     setLoading(true);
     try {
-      const [st, iList] = await Promise.all([
+      const [st, iList, marksList] = await Promise.all([
         dbService.getStudentById(studentId),
         dbService.getInterventions({ studentId }),
+        dbService.getStudentAcademicMarks(studentId).catch(() => []),
       ]);
       setStudent(st);
       setInterventions(iList);
+      setIaMarks(marksList);
     } catch (err) {
       console.error('Failed to load Student 360:', err);
     } finally {
@@ -136,6 +144,15 @@ export const Student360View: React.FC<Student360ViewProps> = ({
                   <ShieldAlert className="w-4 h-4" /> Interventions ({interventions.length})
                 </button>
               )}
+
+              <button
+                onClick={() => setActiveTab('ia-marks')}
+                className={`px-4 py-2 rounded-xl font-bold text-xs flex items-center gap-2 ${
+                  activeTab === 'ia-marks' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <FileSpreadsheet className="w-4 h-4" /> IA Marks ({iaMarks.length})
+              </button>
 
               <button
                 onClick={() => setActiveTab('timeline')}
@@ -323,6 +340,103 @@ export const Student360View: React.FC<Student360ViewProps> = ({
                       )}
                     </div>
                   ))
+                )}
+              </div>
+            )}
+
+            {/* TAB: IA MARKS */}
+            {activeTab === 'ia-marks' && (
+              <div className="space-y-4">
+                <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between">
+                  <div>
+                    <h4 className="font-bold text-white text-xs flex items-center gap-2">
+                      <FileSpreadsheet className="w-4 h-4 text-indigo-400" /> Internal Assessment (IA1 / IA2) Performance
+                    </h4>
+                    <p className="text-[11px] text-slate-400">Subject-wise marks, averages, and performance trends for {student.name}</p>
+                  </div>
+                  {iaMarks.length > 0 && (
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="px-2.5 py-1 rounded-md bg-indigo-950 text-indigo-300 border border-indigo-800 font-bold">
+                        {iaMarks.length} Subjects Evaluated
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {iaMarks.length === 0 ? (
+                  <div className="p-8 text-center bg-slate-950 border border-slate-800 rounded-xl space-y-2">
+                    <FileSpreadsheet className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+                    <p className="text-slate-300 font-medium">No Internal Assessment (IA) Marks Records Found</p>
+                    <p className="text-slate-500 text-[11px]">Admin can import subject-wise IA marks via the IA Marks Import tool.</p>
+                  </div>
+                ) : (
+                  <div className="border border-slate-800 rounded-xl overflow-hidden">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-950 text-slate-400 border-b border-slate-800 font-semibold">
+                        <tr>
+                          <th className="p-3">Term</th>
+                          <th className="p-3">Subject Code & Name</th>
+                          <th className="p-3 text-center">IA1 (Max 50)</th>
+                          <th className="p-3 text-center">IA2 (Max 50)</th>
+                          <th className="p-3 text-center">Average</th>
+                          <th className="p-3 text-center">Trend</th>
+                          <th className="p-3 text-right">Performance Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/60 bg-slate-900/40 text-slate-300">
+                        {iaMarks.map((m) => {
+                          const avg = Math.round(((m.ia1Marks + m.ia2Marks) / 2) * 10) / 10;
+                          const isLow = avg < 20 || m.ia1Marks < 20 || m.ia2Marks < 20;
+                          let trend: 'improving' | 'stable' | 'declining' = 'stable';
+                          if (m.ia2Marks > m.ia1Marks) trend = 'improving';
+                          else if (m.ia2Marks < m.ia1Marks) trend = 'declining';
+
+                          return (
+                            <tr key={m.id} className={isLow ? 'bg-rose-950/20' : 'hover:bg-slate-900/60'}>
+                              <td className="p-3 font-mono text-[11px] text-slate-400">
+                                {m.academicYear} • {m.semester}
+                              </td>
+                              <td className="p-3">
+                                <span className="font-bold text-white block">{m.subjectCode}</span>
+                                <span className="text-[11px] text-slate-400">{m.subjectName}</span>
+                              </td>
+                              <td className="p-3 text-center font-bold text-indigo-300">{m.ia1Marks}</td>
+                              <td className="p-3 text-center font-bold text-indigo-300">{m.ia2Marks}</td>
+                              <td className="p-3 text-center font-bold text-white">{avg}</td>
+                              <td className="p-3 text-center">
+                                {trend === 'improving' && (
+                                  <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-400 bg-emerald-950 px-2 py-0.5 rounded border border-emerald-800">
+                                    <TrendingUp className="w-3 h-3" /> Improving
+                                  </span>
+                                )}
+                                {trend === 'stable' && (
+                                  <span className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-400 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
+                                    <Minus className="w-3 h-3" /> Stable
+                                  </span>
+                                )}
+                                {trend === 'declining' && (
+                                  <span className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-400 bg-rose-950 px-2 py-0.5 rounded border border-rose-800">
+                                    <TrendingDown className="w-3 h-3" /> Declining
+                                  </span>
+                                )}
+                              </td>
+                              <td className="p-3 text-right">
+                                {isLow ? (
+                                  <span className="px-2.5 py-1 rounded text-[10px] font-bold bg-rose-950 text-rose-300 border border-rose-800">
+                                    Needs Academic Support
+                                  </span>
+                                ) : (
+                                  <span className="px-2.5 py-1 rounded text-[10px] font-bold bg-emerald-950 text-emerald-300 border border-emerald-800">
+                                    Satisfactory
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
                 )}
               </div>
             )}

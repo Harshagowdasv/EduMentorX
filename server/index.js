@@ -135,6 +135,108 @@ app.post('/api/admin/import-students', async (req, res) => {
   }
 });
 
+// Delete / Deactivate Student Endpoint
+app.post('/api/admin/delete-student', async (req, res) => {
+  try {
+    const { studentId, actorId } = req.body;
+    if (!studentId) return res.status(400).json({ error: 'studentId is required.' });
+
+    if (adminDb) {
+      const studentDocRef = adminDb.collection('students').doc(studentId);
+      const studentSnap = await studentDocRef.get();
+
+      if (studentSnap.exists) {
+        const studentData = studentSnap.data();
+
+        if (studentData.email && adminAuth) {
+          try {
+            const userRecord = await adminAuth.getUserByEmail(studentData.email).catch(() => null);
+            if (userRecord) {
+              await adminAuth.updateUser(userRecord.uid, { disabled: true });
+            }
+          } catch (authErr) {
+            console.warn('[Admin Delete Student Auth Notice]:', authErr.message);
+          }
+        }
+
+        await studentDocRef.set({
+          academicStatus: 'Deactivated',
+          status: 'DEACTIVATED',
+          isDeactivated: true,
+          mentorId: null,
+          updatedAt: new Date().toISOString(),
+        }, { merge: true });
+
+        const allocQuery = await adminDb.collection('mentorAllocations')
+          .where('studentId', '==', studentId)
+          .where('status', '==', 'ACTIVE')
+          .get();
+
+        const batch = adminDb.batch();
+        allocQuery.docs.forEach((docSnap) => {
+          batch.update(docSnap.ref, { status: 'DEACTIVATED' });
+        });
+        await batch.commit().catch(() => null);
+
+        await adminDb.collection('auditLogs').add({
+          actorId: actorId || 'admin',
+          actorName: 'Admin User',
+          actorRole: 'admin',
+          action: 'DELETE_STUDENT',
+          targetType: 'Student',
+          targetId: studentId,
+          timestamp: new Date().toISOString(),
+          details: `Admin disabled Auth account and marked student ${studentData.name} (${studentData.usn}) as deactivated.`,
+        }).catch(() => null);
+      }
+    }
+
+    res.json({ success: true, message: 'Student account disabled and active allocations cleared.' });
+  } catch (err) {
+    console.error('[Delete Student Error]:', err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Edit Student Endpoint
+app.post('/api/admin/edit-student', async (req, res) => {
+  try {
+    const { studentId, updates, actorId } = req.body;
+    if (!studentId || !updates) return res.status(400).json({ error: 'studentId and updates are required.' });
+
+    delete updates.usn;
+    delete updates.id;
+
+    if (adminDb) {
+      const studentDocRef = adminDb.collection('students').doc(studentId);
+      const studentSnap = await studentDocRef.get();
+      if (studentSnap.exists) {
+        const currentData = studentSnap.data();
+        await studentDocRef.set({
+          ...updates,
+          updatedAt: new Date().toISOString(),
+        }, { merge: true });
+
+        await adminDb.collection('auditLogs').add({
+          actorId: actorId || 'admin',
+          actorName: 'Admin User',
+          actorRole: 'admin',
+          action: 'EDIT_STUDENT',
+          targetType: 'Student',
+          targetId: studentId,
+          timestamp: new Date().toISOString(),
+          details: `Admin updated student ${currentData.name} (${currentData.usn}) fields: ${Object.keys(updates).join(', ')}`,
+        }).catch(() => null);
+      }
+    }
+
+    res.json({ success: true, message: 'Student profile updated successfully.' });
+  } catch (err) {
+    console.error('[Edit Student Error]:', err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // Rate Limiting Store for AI Endpoint
 const aiRateLimitMap = new Map();
 

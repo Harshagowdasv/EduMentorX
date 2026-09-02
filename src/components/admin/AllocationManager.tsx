@@ -2,6 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { Student, Mentor, AllocationHistory } from '../../types';
 import { dbService } from '../../services/serviceFactory';
 import { Modal } from '../common/Modal';
+import { IAMarksImportWizard } from './IAMarksImportWizard';
+import { EditStudentModal } from './EditStudentModal';
+import { DeleteStudentModal } from './DeleteStudentModal';
 import {
   UserCheck,
   RefreshCw,
@@ -15,7 +18,10 @@ import {
   CheckSquare,
   Square,
   AlertTriangle,
-  ArrowRight
+  ArrowRight,
+  FileSpreadsheet,
+  Edit2,
+  Trash2
 } from 'lucide-react';
 
 interface AllocationManagerProps {
@@ -28,6 +34,11 @@ export const AllocationManager: React.FC<AllocationManagerProps> = ({ actorId, o
   const [mentors, setMentors] = useState<Mentor[]>([]);
   const [history, setHistory] = useState<AllocationHistory[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // New Admin Enhancement Modals
+  const [isIAMarksModalOpen, setIsIAMarksModalOpen] = useState(false);
+  const [editingStudent, setEditingStudent] = useState<Student | null>(null);
+  const [deletingStudent, setDeletingStudent] = useState<Student | null>(null);
 
   // Filters
   const [search, setSearch] = useState('');
@@ -219,6 +230,12 @@ export const AllocationManager: React.FC<AllocationManagerProps> = ({ actorId, o
           </div>
 
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setIsIAMarksModalOpen(true)}
+              className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-indigo-600/30 transition"
+            >
+              <FileSpreadsheet className="w-4 h-4" /> Import IA Marks
+            </button>
             <span className="px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold font-mono">
               Total: {totalStudents}
             </span>
@@ -475,12 +492,27 @@ export const AllocationManager: React.FC<AllocationManagerProps> = ({ actorId, o
                           {s.riskLevel.replace('_', ' ')}
                         </span>
                       </td>
-                      <td className="p-4 text-right space-x-2">
+                      <td className="p-4 text-right space-x-1.5 flex items-center justify-end">
                         <button
                           onClick={() => onViewStudent360(s.id)}
-                          className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold border border-slate-700 transition-all text-xs"
+                          className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold border border-slate-700 transition-all text-xs"
+                          title="View Student 360° Profile"
                         >
                           360° Profile
+                        </button>
+                        <button
+                          onClick={() => setEditingStudent(s)}
+                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-400 hover:text-white border border-slate-700 transition-all"
+                          title="Edit Student Profile"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => setDeletingStudent(s)}
+                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-600 text-slate-400 hover:text-white border border-slate-700 transition-all"
+                          title="Deactivate / Delete Student"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </td>
                     </tr>
@@ -662,6 +694,29 @@ export const AllocationManager: React.FC<AllocationManagerProps> = ({ actorId, o
           </div>
         </Modal>
       )}
+
+      <IAMarksImportWizard
+        isOpen={isIAMarksModalOpen}
+        onClose={() => setIsIAMarksModalOpen(false)}
+        actorId={actorId}
+        onSuccess={loadData}
+      />
+
+      <EditStudentModal
+        isOpen={Boolean(editingStudent)}
+        onClose={() => setEditingStudent(null)}
+        student={editingStudent}
+        actorId={actorId}
+        onSuccess={loadData}
+      />
+
+      <DeleteStudentModal
+        isOpen={Boolean(deletingStudent)}
+        onClose={() => setDeletingStudent(null)}
+        student={deletingStudent}
+        actorId={actorId}
+        onSuccess={loadData}
+      />
     </div>
   );
 };

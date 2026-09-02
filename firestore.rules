@@ -349,5 +349,11 @@ service cloud.firestore {
       allow read, write: if isAdmin();
     }
 
+    match /studentAcademicMarks/{id} {
+      allow read: if isAdmin() ||
+                  (isStudent() && (resource.data.studentId == request.auth.uid || isOwner(resource.data.studentId))) ||
+                  isAssignedMentor(resource.data.studentId);
+      allow write: if isAdmin();
+    }
   }
 }

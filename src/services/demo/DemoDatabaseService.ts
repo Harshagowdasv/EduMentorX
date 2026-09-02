@@ -30,7 +30,9 @@ import {
   AIMeetingSummary,
   AIMemoryItem,
   MeetingFeedback,
-  StudentTrendStatus
+  StudentTrendStatus,
+  StudentAcademicMark,
+  IAMarksImportResult
 } from '../../types';
 import {
   initialMentors,
@@ -75,8 +77,9 @@ export class DemoDatabaseService implements IDatabaseService {
 
   private async ensureIndexedDBInitialized(): Promise<void> {
     const isBrowser = typeof window !== 'undefined' && typeof localStorage !== 'undefined';
-    const isInit = isBrowser ? localStorage.getItem(KEY_INIT) : true;
-    if (!isInit && isBrowser) {
+    const isInit = isBrowser ? localStorage.getItem(KEY_INIT) : false;
+    const existingYears = await idbService.getAll(STORES.ACADEMIC_YEARS);
+    if (!isInit || existingYears.length === 0) {
       await idbService.putAll(STORES.MENTORS, initialMentors);
       await idbService.putAll(STORES.STUDENTS, initialStudents);
       await idbService.putAll(STORES.ALLOCATION_HISTORY, initialAllocationHistory);
@@ -124,7 +127,7 @@ export class DemoDatabaseService implements IDatabaseService {
       };
       await idbService.put(STORES.NOTIFICATIONS, initialNotif);
 
-      localStorage.setItem(KEY_INIT, 'true');
+      if (isBrowser) localStorage.setItem(KEY_INIT, 'true');
     }
   }
 
@@ -1431,6 +1434,15 @@ export class DemoDatabaseService implements IDatabaseService {
     return newYear;
   }
 
+  async updateAcademicYear(id: string, updates: Partial<AcademicYear>): Promise<AcademicYear> {
+    await this.initPromise;
+    const current = await idbService.getById<AcademicYear>(STORES.ACADEMIC_YEARS, id);
+    if (!current) throw new Error('Academic year not found');
+    const updated = { ...current, ...updates };
+    await idbService.put(STORES.ACADEMIC_YEARS, updated);
+    return updated;
+  }
+
   async getSemesters(): Promise<Semester[]> {
     await this.initPromise;
     return idbService.getAll<Semester>(STORES.SEMESTERS);
@@ -1444,6 +1456,257 @@ export class DemoDatabaseService implements IDatabaseService {
     };
     await idbService.put(STORES.SEMESTERS, newSem);
     return newSem;
+  }
+
+  async updateSemester(id: string, updates: Partial<Semester>): Promise<Semester> {
+    await this.initPromise;
+    const current = await idbService.getById<Semester>(STORES.SEMESTERS, id);
+    if (!current) throw new Error('Semester not found');
+    const updated = { ...current, ...updates };
+    await idbService.put(STORES.SEMESTERS, updated);
+    return updated;
+  }
+
+  async setActiveSemester(semesterId: string): Promise<void> {
+    await this.initPromise;
+    const sems = await idbService.getAll<Semester>(STORES.SEMESTERS);
+    for (const s of sems) {
+      const isTarget = s.id === semesterId;
+      if (s.isActive !== isTarget) {
+        s.isActive = isTarget;
+        await idbService.put(STORES.SEMESTERS, s);
+      }
+    }
+  }
+
+  async archiveSemester(semesterId: string): Promise<void> {
+    await this.initPromise;
+    const target = await idbService.getById<Semester>(STORES.SEMESTERS, semesterId);
+    if (target) {
+      target.isActive = false;
+      await idbService.put(STORES.SEMESTERS, target);
+    }
+  }
+
+  async importIAMarksCSV(
+    rows: Record<string, any>[],
+    academicYearInput: string,
+    semesterInput: string,
+    actorId: string
+  ): Promise<IAMarksImportResult> {
+    await this.initPromise;
+    const existingStudents = await idbService.getAll<Student>(STORES.STUDENTS);
+    const existingStudentsMap = new Map<string, Student>();
+    existingStudents.forEach((s) => {
+      existingStudentsMap.set(s.usn.trim().toUpperCase(), s);
+      existingStudentsMap.set(s.id, s);
+    });
+
+    const existingMarks = await idbService.getAll<StudentAcademicMark>(STORES.STUDENT_ACADEMIC_MARKS);
+    const existingMarksMap = new Map<string, StudentAcademicMark>();
+    existingMarks.forEach((m) => {
+      const key = `${m.studentUsn.trim().toUpperCase()}_${m.academicYear.trim()}_${m.semester.trim()}_${m.subjectCode.trim().toUpperCase()}`;
+      existingMarksMap.set(key, m);
+    });
+
+    let importedCount = 0;
+    let updatedCount = 0;
+    let skippedCount = 0;
+    let failedCount = 0;
+    const errors: IAMarksImportResult['errors'] = [];
+    const details: IAMarksImportResult['details'] = [];
+
+    const nowStr = new Date().toISOString();
+
+    for (let i = 0; i < rows.length; i++) {
+      const raw = rows[i];
+      const rowNumber = i + 1;
+
+      const normRow: Record<string, any> = {};
+      Object.keys(raw).forEach((k) => {
+        const cleanKey = k.trim().toLowerCase().replace(/[\s_\-]+/g, '');
+        normRow[cleanKey] = raw[k];
+      });
+
+      const usn = String(normRow.usn || '').trim().toUpperCase();
+      const studentName = String(normRow.studentname || normRow.name || '').trim();
+      const academicYear = String(normRow.academicyear || academicYearInput || '').trim();
+      const semester = String(normRow.semester || semesterInput || '').trim();
+      const subjectCode = String(normRow.subjectcode || normRow.code || '').trim().toUpperCase();
+      const subjectName = String(normRow.subjectname || normRow.subject || '').trim();
+      
+      const ia1Raw = normRow.ia1marks ?? normRow.ia1 ?? normRow.ia1mark;
+      const ia2Raw = normRow.ia2marks ?? normRow.ia2 ?? normRow.ia2mark;
+
+      const ia1 = parseFloat(String(ia1Raw ?? '0'));
+      const ia2 = parseFloat(String(ia2Raw ?? '0'));
+
+      if (!usn) {
+        failedCount++;
+        errors.push({ rowNumber, usn: 'MISSING', subjectCode, reason: 'USN is required' });
+        details.push({ rowNumber, usn: 'MISSING', name: studentName, subjectCode, status: 'ERROR', reason: 'USN is required' });
+        continue;
+      }
+
+      const targetStudent = existingStudentsMap.get(usn);
+      if (!targetStudent) {
+        failedCount++;
+        errors.push({ rowNumber, usn, subjectCode, reason: `Student USN '${usn}' not found in database` });
+        details.push({ rowNumber, usn, name: studentName, subjectCode, status: 'ERROR', reason: `Student USN '${usn}' not found in database` });
+        continue;
+      }
+
+      if (!subjectCode) {
+        failedCount++;
+        errors.push({ rowNumber, usn, subjectCode: 'MISSING', reason: 'Subject code is required' });
+        details.push({ rowNumber, usn, name: studentName, subjectCode: 'MISSING', status: 'ERROR', reason: 'Subject code is required' });
+        continue;
+      }
+
+      if (isNaN(ia1) || ia1 < 0 || ia1 > 100 || isNaN(ia2) || ia2 < 0 || ia2 > 100) {
+        failedCount++;
+        errors.push({ rowNumber, usn, subjectCode, reason: `Invalid IA marks: IA1=${ia1Raw}, IA2=${ia2Raw}. Must be numeric 0-100` });
+        details.push({ rowNumber, usn, name: studentName, subjectCode, status: 'ERROR', reason: `Invalid IA marks: IA1=${ia1Raw}, IA2=${ia2Raw}. Must be numeric 0-100` });
+        continue;
+      }
+
+      const compositeKey = `${usn}_${academicYear}_${semester}_${subjectCode}`;
+      const existingMark = existingMarksMap.get(compositeKey);
+
+      if (existingMark) {
+        const updatedMark: StudentAcademicMark = {
+          ...existingMark,
+          studentName: studentName || targetStudent.name,
+          subjectName: subjectName || existingMark.subjectName,
+          ia1Marks: ia1,
+          ia2Marks: ia2,
+          updatedAt: nowStr,
+          updatedBy: actorId,
+        };
+        await idbService.put(STORES.STUDENT_ACADEMIC_MARKS, updatedMark);
+        existingMarksMap.set(compositeKey, updatedMark);
+        updatedCount++;
+        details.push({ rowNumber, usn, name: targetStudent.name, subjectCode, status: 'UPDATE' });
+      } else {
+        const newMark: StudentAcademicMark = {
+          id: `iam_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          studentId: targetStudent.id,
+          studentUsn: usn,
+          studentName: studentName || targetStudent.name,
+          academicYear,
+          semester,
+          subjectCode,
+          subjectName: subjectName || subjectCode,
+          ia1Marks: ia1,
+          ia2Marks: ia2,
+          maxMarks: 50,
+          createdAt: nowStr,
+          updatedAt: nowStr,
+          updatedBy: actorId,
+        };
+        await idbService.put(STORES.STUDENT_ACADEMIC_MARKS, newMark);
+        existingMarksMap.set(compositeKey, newMark);
+        importedCount++;
+        details.push({ rowNumber, usn, name: targetStudent.name, subjectCode, status: 'NEW' });
+      }
+    }
+
+    await this.logAuditEvent({
+      actorId,
+      actorName: 'Admin User',
+      actorRole: 'admin',
+      action: 'IMPORT_IA_MARKS',
+      targetType: 'StudentAcademicMark',
+      targetId: `batch_${Date.now()}`,
+      details: `Imported IA Marks CSV: ${importedCount} new, ${updatedCount} updated, ${failedCount} errors across ${rows.length} rows.`,
+    });
+
+    return {
+      totalRows: rows.length,
+      importedCount,
+      updatedCount,
+      skippedCount,
+      failedCount,
+      errors,
+      details,
+    };
+  }
+
+  async getStudentAcademicMarks(studentId: string): Promise<StudentAcademicMark[]> {
+    await this.initPromise;
+    const allMarks = await idbService.getAll<StudentAcademicMark>(STORES.STUDENT_ACADEMIC_MARKS);
+    const student = await idbService.getById<Student>(STORES.STUDENTS, studentId);
+    const usnUpper = student ? student.usn.trim().toUpperCase() : studentId.trim().toUpperCase();
+    return allMarks.filter((m) => m.studentId === studentId || m.studentUsn.trim().toUpperCase() === usnUpper);
+  }
+
+  async editStudent(id: string, updates: Partial<Student>, actorId: string): Promise<Student> {
+    await this.initPromise;
+    const current = await idbService.getById<Student>(STORES.STUDENTS, id);
+    if (!current) throw new Error('Student not found');
+
+    const cleanUpdates = { ...updates };
+    delete (cleanUpdates as any).usn;
+    delete (cleanUpdates as any).id;
+
+    const changedFields: { field: string; oldValue: any; newValue: any }[] = [];
+    Object.keys(cleanUpdates).forEach((key) => {
+      const k = key as keyof Student;
+      if (current[k] !== cleanUpdates[k]) {
+        changedFields.push({ field: key, oldValue: current[k], newValue: cleanUpdates[k] });
+      }
+    });
+
+    const updatedStudent: Student = {
+      ...current,
+      ...cleanUpdates,
+    };
+
+    const riskEval = calculateExplainableRisk(updatedStudent);
+    updatedStudent.riskLevel = riskEval.status;
+    updatedStudent.riskReasons = riskEval.reasons;
+
+    await idbService.put(STORES.STUDENTS, updatedStudent);
+
+    await this.logAuditEvent({
+      actorId,
+      actorName: 'Admin User',
+      actorRole: 'admin',
+      action: 'EDIT_STUDENT',
+      targetType: 'Student',
+      targetId: id,
+      previousValue: current,
+      newValue: updatedStudent,
+      details: `Admin edited student ${current.name} (${current.usn}): ${changedFields.map(f => f.field).join(', ')}`,
+    });
+
+    return updatedStudent;
+  }
+
+  async deleteStudent(id: string, actorId: string): Promise<void> {
+    await this.initPromise;
+    const student = await idbService.getById<Student>(STORES.STUDENTS, id);
+    if (!student) return;
+
+    student.academicStatus = 'Deactivated';
+    (student as any).status = 'DEACTIVATED';
+    (student as any).isDeactivated = true;
+    (student as any).mentorId = null;
+    (student as any).mentorName = undefined;
+    (student as any).mentorEmail = undefined;
+
+    await idbService.put(STORES.STUDENTS, student);
+    await this.recalculateMentorMenteeCounts();
+
+    await this.logAuditEvent({
+      actorId,
+      actorName: 'Admin User',
+      actorRole: 'admin',
+      action: 'DELETE_STUDENT',
+      targetType: 'Student',
+      targetId: id,
+      details: `Admin deactivated student ${student.name} (${student.usn}) and cleared active mentor allocation while preserving historical records.`,
+    });
   }
 
   async getCalendarEvents(department?: string, semester?: string): Promise<AcademicCalendarEvent[]> {

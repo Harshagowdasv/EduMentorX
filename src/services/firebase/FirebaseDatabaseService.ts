@@ -31,7 +31,9 @@ import {
   AIMeetingSummary,
   AIMemoryItem,
   MeetingFeedback,
-  StudentTrendStatus
+  StudentTrendStatus,
+  StudentAcademicMark,
+  IAMarksImportResult
 } from '../../types';
 import { DemoDatabaseService } from '../demo/DemoDatabaseService';
 import { db, isFirebaseConfigured } from './firebaseConfig';
@@ -738,12 +740,54 @@ export class FirebaseDatabaseService implements IDatabaseService {
     return this.fallback.createAcademicYear(year);
   }
 
+  async updateAcademicYear(id: string, updates: Partial<AcademicYear>): Promise<AcademicYear> {
+    return this.fallback.updateAcademicYear(id, updates);
+  }
+
   async getSemesters(): Promise<Semester[]> {
     return this.fallback.getSemesters();
   }
 
   async createSemester(sem: Omit<Semester, 'id'>): Promise<Semester> {
     return this.fallback.createSemester(sem);
+  }
+
+  async updateSemester(id: string, updates: Partial<Semester>): Promise<Semester> {
+    return this.fallback.updateSemester(id, updates);
+  }
+
+  async setActiveSemester(semesterId: string): Promise<void> {
+    return this.fallback.setActiveSemester(semesterId);
+  }
+
+  async archiveSemester(semesterId: string): Promise<void> {
+    return this.fallback.archiveSemester(semesterId);
+  }
+
+  async importIAMarksCSV(
+    rows: Record<string, any>[],
+    academicYear: string,
+    semester: string,
+    actorId: string
+  ): Promise<IAMarksImportResult> {
+    const res = await this.fallback.importIAMarksCSV(rows, academicYear, semester, actorId);
+    this.invalidateCache('all');
+    return res;
+  }
+
+  async getStudentAcademicMarks(studentId: string): Promise<StudentAcademicMark[]> {
+    return this.fallback.getStudentAcademicMarks(studentId);
+  }
+
+  async editStudent(id: string, updates: Partial<Student>, actorId: string): Promise<Student> {
+    const res = await this.fallback.editStudent(id, updates, actorId);
+    this.invalidateCache('all');
+    return res;
+  }
+
+  async deleteStudent(id: string, actorId: string): Promise<void> {
+    await this.fallback.deleteStudent(id, actorId);
+    this.invalidateCache('all');
   }
 
   async getCalendarEvents(department?: string, semester?: string): Promise<AcademicCalendarEvent[]> {

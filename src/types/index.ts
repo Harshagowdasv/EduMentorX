@@ -303,7 +303,10 @@ export type AuditActionType =
   | 'STUDENT_CREATED_FROM_CSV'
   | 'STUDENT_UPDATED_FROM_CSV'
   | 'STUDENT_SKIPPED_FROM_CSV'
-  | 'MENTOR_ALLOCATION_FROM_CSV';
+  | 'MENTOR_ALLOCATION_FROM_CSV'
+  | 'IMPORT_IA_MARKS'
+  | 'EDIT_STUDENT'
+  | 'DELETE_STUDENT';
 
 export interface AdminAuditLog {
   id: string;
@@ -311,7 +314,7 @@ export interface AdminAuditLog {
   actorName: string;
   actorRole: UserRole;
   action: AuditActionType;
-  targetType: 'Mentor' | 'Student' | 'Allocation' | 'Resource' | 'SafetyAlert' | 'CSVImport' | 'Meeting' | 'Task' | 'Intervention';
+  targetType: 'Mentor' | 'Student' | 'Allocation' | 'Resource' | 'SafetyAlert' | 'CSVImport' | 'Meeting' | 'Task' | 'Intervention' | 'StudentAcademicMark';
   targetId: string;
   timestamp: string;
   previousValue?: any;
@@ -488,6 +491,33 @@ export interface CSVImportHistoryRecord {
   updatedCount: number;
   skippedCount: number;
   status: 'SUCCESS' | 'PARTIAL_SUCCESS' | 'FAILED';
+}
+
+export interface StudentAcademicMark {
+  id: string;
+  studentId: string;
+  studentUsn: string;
+  studentName: string;
+  academicYear: string;
+  semester: string;
+  subjectCode: string;
+  subjectName: string;
+  ia1Marks: number;
+  ia2Marks: number;
+  maxMarks?: number;
+  createdAt: string;
+  updatedAt: string;
+  updatedBy: string;
+}
+
+export interface IAMarksImportResult {
+  totalRows: number;
+  importedCount: number;
+  updatedCount: number;
+  skippedCount: number;
+  failedCount: number;
+  errors: { rowNumber: number; usn: string; subjectCode: string; reason: string }[];
+  details: { rowNumber: number; usn: string; name: string; subjectCode: string; status: 'NEW' | 'UPDATE' | 'ERROR'; reason?: string }[];
 }
 
 export interface AcademicYear {

@@ -1,7 +1,7 @@
 // Native IndexedDB Helper Engine for EduMentorX Demo Provider Storage (Phases 1, 2 & 3)
 
 const DB_NAME = 'EduMentorX_Demo_DB';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 export const STORES = {
   MENTORS: 'mentors',
@@ -31,6 +31,7 @@ export const STORES = {
   AI_MEETING_SUMMARIES: 'aiMeetingSummaries',
   AI_MEMORIES: 'aiMemories',
   MEETING_FEEDBACK: 'meetingFeedback',
+  STUDENT_ACADEMIC_MARKS: 'studentAcademicMarks',
 };
 
 class IndexedDBService {
