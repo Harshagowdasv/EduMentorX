@@ -1,6 +1,18 @@
-import React from 'react';
-import { Student } from '../../types';
-import { TrendingUp, GraduationCap, Clock, AlertTriangle, UserCheck, Mail, Phone } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Student, StudentAcademicMark } from '../../types';
+import { dbService } from '../../services/serviceFactory';
+import {
+  TrendingUp,
+  GraduationCap,
+  Clock,
+  AlertTriangle,
+  Mail,
+  FileSpreadsheet,
+  TrendingDown,
+  Minus,
+  BookOpen,
+  Loader2
+} from 'lucide-react';
 
 interface StudentDashboardOverviewProps {
   student: Student;
@@ -11,6 +23,42 @@ export const StudentDashboardOverview: React.FC<StudentDashboardOverviewProps> =
   student,
   onOpenAIMentor,
 }) => {
+  const [iaMarks, setIaMarks] = useState<StudentAcademicMark[]>([]);
+  const [loadingMarks, setLoadingMarks] = useState(true);
+  const [marksError, setMarksError] = useState<string | null>(null);
+  const [selectedTermFilter, setSelectedTermFilter] = useState<string>('active');
+
+  useEffect(() => {
+    if (student && student.id) {
+      loadStudentMarks();
+    }
+  }, [student?.id]);
+
+  const loadStudentMarks = async () => {
+    setLoadingMarks(true);
+    setMarksError(null);
+    try {
+      const marks = await dbService.getStudentAcademicMarks(student.id);
+      setIaMarks(marks);
+    } catch (err: any) {
+      console.error('Failed to load student IA marks:', err);
+      setMarksError(err.message || 'Failed to load IA marks');
+    } finally {
+      setLoadingMarks(false);
+    }
+  };
+
+  // Extract unique terms
+  const termsSet = Array.from(
+    new Set(iaMarks.map((m) => `${m.academicYear}__${m.semester}`))
+  );
+
+  const filteredMarks = iaMarks.filter((m) => {
+    if (selectedTermFilter === 'active' || selectedTermFilter === 'all') return true;
+    const key = `${m.academicYear}__${m.semester}`;
+    return key === selectedTermFilter;
+  });
+
   return (
     <div className="space-y-6">
       {/* Top Academic Stats Cards */}
@@ -62,6 +110,138 @@ export const StudentDashboardOverview: React.FC<StudentDashboardOverviewProps> =
         </div>
       </div>
 
+      {/* ACADEMIC PERFORMANCE — IA MARKS SECTION */}
+      <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+          <div>
+            <h3 className="text-sm font-bold text-white flex items-center gap-2">
+              <FileSpreadsheet className="w-4 h-4 text-indigo-400" />
+              Internal Assessment (IA1 / IA2) Performance
+            </h3>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Subject-wise marks, averages, and internal performance trends for {student.name} ({student.usn})
+            </p>
+          </div>
+
+          {termsSet.length > 1 && (
+            <div className="flex items-center gap-2">
+              <label className="text-[11px] text-slate-400 font-medium">Filter Term:</label>
+              <select
+                value={selectedTermFilter}
+                onChange={(e) => setSelectedTermFilter(e.target.value)}
+                className="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white"
+              >
+                <option value="all">All Terms ({termsSet.length})</option>
+                {termsSet.map((termKey) => {
+                  const [yr, sem] = termKey.split('__');
+                  return (
+                    <option key={termKey} value={termKey}>
+                      {yr} • {sem}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+          )}
+        </div>
+
+        {/* LOADING STATE */}
+        {loadingMarks && (
+          <div className="p-8 text-center bg-slate-950/60 border border-slate-800/80 rounded-xl space-y-2">
+            <Loader2 className="w-6 h-6 text-indigo-400 animate-spin mx-auto mb-2" />
+            <p className="text-slate-300 font-medium text-xs">Loading academic performance...</p>
+          </div>
+        )}
+
+        {/* ERROR STATE */}
+        {!loadingMarks && marksError && (
+          <div className="p-4 rounded-xl bg-rose-950/60 border border-rose-800 text-rose-300 text-xs flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-rose-400" />
+            Failed to load IA marks. Please try refreshing the page.
+          </div>
+        )}
+
+        {/* EMPTY STATE */}
+        {!loadingMarks && !marksError && iaMarks.length === 0 && (
+          <div className="p-8 text-center bg-slate-950/60 border border-slate-800/80 rounded-xl space-y-2">
+            <FileSpreadsheet className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+            <p className="text-slate-300 font-semibold text-xs">No IA marks have been uploaded for this semester yet.</p>
+            <p className="text-slate-500 text-[11px]">Marks will appear here once entered by the academic administrator.</p>
+          </div>
+        )}
+
+        {/* DATA TABLE */}
+        {!loadingMarks && !marksError && filteredMarks.length > 0 && (
+          <div className="border border-slate-800 rounded-xl overflow-hidden">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-950 text-slate-400 border-b border-slate-800 font-semibold">
+                <tr>
+                  <th className="p-3">Academic Term</th>
+                  <th className="p-3">Subject Code & Name</th>
+                  <th className="p-3 text-center">IA1 (Max 50)</th>
+                  <th className="p-3 text-center">IA2 (Max 50)</th>
+                  <th className="p-3 text-center">Average</th>
+                  <th className="p-3 text-center">Trend</th>
+                  <th className="p-3 text-right">Performance Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/60 bg-slate-900/40 text-slate-300">
+                {filteredMarks.map((m) => {
+                  const avg = Math.round(((m.ia1Marks + m.ia2Marks) / 2) * 10) / 10;
+                  const isLow = avg < 20 || m.ia1Marks < 20 || m.ia2Marks < 20; // < 40%
+                  let trend: 'improving' | 'stable' | 'declining' = 'stable';
+                  if (m.ia2Marks > m.ia1Marks) trend = 'improving';
+                  else if (m.ia2Marks < m.ia1Marks) trend = 'declining';
+
+                  return (
+                    <tr key={m.id} className={isLow ? 'bg-rose-950/20' : 'hover:bg-slate-900/60'}>
+                      <td className="p-3 font-mono text-[11px] text-slate-400">
+                        {m.academicYear} • {m.semester}
+                      </td>
+                      <td className="p-3">
+                        <span className="font-bold text-white block">{m.subjectCode}</span>
+                        <span className="text-[11px] text-slate-400">{m.subjectName}</span>
+                      </td>
+                      <td className="p-3 text-center font-bold text-indigo-300">{m.ia1Marks}</td>
+                      <td className="p-3 text-center font-bold text-indigo-300">{m.ia2Marks}</td>
+                      <td className="p-3 text-center font-bold text-white">{avg}</td>
+                      <td className="p-3 text-center">
+                        {trend === 'improving' && (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-400 bg-emerald-950 px-2 py-0.5 rounded border border-emerald-800">
+                            <TrendingUp className="w-3 h-3" /> Improving
+                          </span>
+                        )}
+                        {trend === 'stable' && (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-400 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
+                            <Minus className="w-3 h-3" /> Stable
+                          </span>
+                        )}
+                        {trend === 'declining' && (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-400 bg-rose-950 px-2 py-0.5 rounded border border-rose-800">
+                            <TrendingDown className="w-3 h-3" /> Declining
+                          </span>
+                        )}
+                      </td>
+                      <td className="p-3 text-right">
+                        {isLow ? (
+                          <span className="px-2.5 py-1 rounded text-[10px] font-bold bg-rose-950 text-rose-300 border border-rose-800">
+                            Needs Academic Support
+                          </span>
+                        ) : (
+                          <span className="px-2.5 py-1 rounded text-[10px] font-bold bg-emerald-950 text-emerald-300 border border-emerald-800">
+                            Satisfactory
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
       {/* Main Mentor Card & AI Promo */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Mentor Card */}
@@ -106,3 +286,4 @@ export const StudentDashboardOverview: React.FC<StudentDashboardOverviewProps> =
     </div>
   );
 };
+

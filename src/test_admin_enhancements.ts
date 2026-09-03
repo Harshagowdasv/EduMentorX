@@ -160,21 +160,52 @@ async function runAdminEnhancementsTestSuite() {
   console.log('PASSED: IA Marks CSV Import, Duplicate Detection, and Invalid USN validation verified.\n');
 
   // ----------------------------------------------------
-  // TEST 3: STUDENT 360 IA MARKS VISIBILITY
+  // TEST 3: STUDENT DASHBOARD & STUDENT 360 MARKS ISOLATION
   // ----------------------------------------------------
-  console.log('--- TEST 3: STUDENT 360 IA MARKS VISIBILITY ---');
-  const studentMarks = await demoDb.getStudentAcademicMarks(testStudent.id);
-  console.log(`Retrieved ${studentMarks.length} IA marks for student ${testStudent.usn}`);
+  console.log('--- TEST 3: STUDENT DASHBOARD & STUDENT 360 MARKS ISOLATION ---');
+  const testStudentBUSN = `TEST-IA-B-${Date.now()}`;
+  const testStudentB = await demoDb.createStudent({
+    usn: testStudentBUSN,
+    userId: `u_${testStudentBUSN}`,
+    mentorId: null,
+    name: 'Student B',
+    email: `student_b_${Date.now()}@edumentorx.edu`,
+    phone: '9888877773',
+    parentPhone: '9888877774',
+    department: 'Computer Science & Engineering',
+    program: 'B.Tech',
+    year: '3rd Year',
+    semester: 'Semester 6',
+    section: 'B',
+    admissionYear: '2023',
+    cgpa: 8.2,
+    attendance: 90,
+    financialScore: 7,
+    studyHours: 15,
+    previousYearBacklogs: 0,
+    currentBacklogs: 0,
+    academicStatus: 'Active',
+  }, actorId);
 
-  if (studentMarks.length !== 2) {
-    throw new Error('FAILED: Student IA Marks count mismatch');
+  const studentAMarks = await demoDb.getStudentAcademicMarks(testStudent.id);
+  const studentBMarks = await demoDb.getStudentAcademicMarks(testStudentB.id);
+
+  console.log(`Student A (${testStudent.usn}) Marks Count: ${studentAMarks.length}`);
+  console.log(`Student B (${testStudentB.usn}) Marks Count: ${studentBMarks.length}`);
+
+  if (studentAMarks.length !== 2) {
+    throw new Error('FAILED: Student A IA Marks count mismatch');
   }
 
-  const cs601 = studentMarks.find((m) => m.subjectCode === 'CS601');
+  if (studentBMarks.length !== 0) {
+    throw new Error('FAILED: Security Isolation Breach! Student B retrieved Student A marks.');
+  }
+
+  const cs601 = studentAMarks.find((m) => m.subjectCode === 'CS601');
   if (!cs601 || cs601.ia1Marks !== 44 || cs601.ia2Marks !== 48) {
     throw new Error('FAILED: Updated IA marks values for CS601 incorrect');
   }
-  console.log('PASSED: Student 360 IA Marks retrieval verified.\n');
+  console.log('PASSED: Student A sees Student A marks, Student B sees 0 marks (Isolation Verified).\n');
 
   // ----------------------------------------------------
   // TEST 4: ADMIN EDIT STUDENT & IMMUTABLE USN
